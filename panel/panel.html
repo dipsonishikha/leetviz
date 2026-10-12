@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LeetViz</title>
+  <link rel="stylesheet" href="panel.css">
+  <link rel="stylesheet" href="kid.css">
+  <script type="module" src="panel.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="brand-dot"></span>LeetViz</div>
+    <div class="problem" id="problem"></div>
+    <button class="mode-switch" id="mode"></button>
+    <span class="pill" id="status">Loading Python…</span>
+    <button class="icon-btn" id="sync" title="Re-read code and problem from LeetCode">⟳</button>
+    <button class="icon-btn" id="close" title="Close (Alt+V)">✕</button>
+  </header>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="step">Step through</button>
+    <button role="tab" data-tab="compare">Compare approaches</button>
+    <button role="tab" data-tab="stress">Find bugs</button>
+  </nav>
+  <div id="banner"></div>
+  <main id="main"></main>
+</body>
+</html>

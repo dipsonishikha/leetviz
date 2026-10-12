@@ -1,0 +1,72 @@
+/* Injected into LeetCode pages. Everything is prefixed `leetviz-` to avoid clashing with LeetCode. */
+
+html.leetviz-open body {
+  /* Dock: shrink LeetCode so the editor stays visible next to the panel. */
+  width: calc(100vw - var(--leetviz-w, 560px)) !important;
+  min-width: 0 !important;
+  overflow-x: hidden !important;
+}
+
+.leetviz-launcher {
+  position: fixed;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%) rotate(180deg);
+  writing-mode: vertical-rl;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 6px;
+  border: 1px solid rgba(255, 161, 22, 0.5);
+  border-left: none;
+  border-radius: 8px 0 0 8px;
+  background: #282828;
+  color: #ffa116;
+  font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  transition: right 0.15s ease;
+}
+.leetviz-launcher:hover { background: #333; }
+.leetviz-launcher-dot { width: 7px; height: 7px; border-radius: 50%; background: #ffa116; }
+html.leetviz-open .leetviz-launcher { right: var(--leetviz-w, 560px); }
+
+.leetviz-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--leetviz-w, 560px);
+  z-index: 2147483001;
+  display: none;
+  background: #1a1a1a;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.35);
+}
+html.leetviz-open .leetviz-drawer { display: block; }
+.leetviz-frame { width: 100%; height: 100%; border: 0; display: block; }
+.leetviz-resize {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 1;
+}
+.leetviz-resize:hover, html.leetviz-resizing .leetviz-resize { background: rgba(255, 161, 22, 0.6); }
+html.leetviz-resizing .leetviz-frame { pointer-events: none; }
+html.leetviz-resizing { cursor: col-resize; user-select: none; }
+
+/* Monaco decorations (applied by main-world.js) */
+.leetviz-cur-line { background: rgba(255, 161, 22, 0.16) !important; }
+.leetviz-cur-gutter { background: #ffa116; width: 3px !important; margin-left: 3px; }
+.leetviz-err-line { background: rgba(239, 71, 67, 0.18) !important; }
+.leetviz-err-gutter { background: #ef4743; width: 3px !important; margin-left: 3px; }
+.leetviz-inline {
+  color: #ffa116 !important;
+  opacity: 0.85;
+  font-style: italic;
+}
+.leetviz-inline-err { color: #ef4743 !important; font-style: italic; }

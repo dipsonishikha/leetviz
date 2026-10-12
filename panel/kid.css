@@ -1,0 +1,189 @@
+/* "Simple" view: big, friendly, animated pictures. Colors come from panel.css tokens. */
+
+:root { --kid-seq: var(--series-1); --kid-look: var(--accent); }
+
+.kid { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+.kid-small { font-size: 12px; color: var(--muted); }
+.kid-code { font-family: var(--mono); font-size: 13px; background: var(--surface-2); padding: 1px 6px; border-radius: 6px; }
+.kid-val { font-size: 16px; }
+
+/* ---------- what just happened */
+.kid-say {
+  display: flex; gap: 12px; align-items: center;
+  border-left-width: 6px !important;
+  padding: 12px 14px; border-radius: 14px;
+  background: var(--surface); border: 2px solid var(--border);
+  font-size: 15px; line-height: 1.5;
+  animation: kid-in 0.25s ease-out;
+}
+.kid-say.tone-yes { border-color: color-mix(in srgb, var(--good) 60%, var(--border)); }
+.kid-say.tone-no { border-color: color-mix(in srgb, var(--warn) 60%, var(--border)); }
+.kid-say.tone-done { border-color: var(--good); background: color-mix(in srgb, var(--good) 8%, var(--surface)); }
+.kid-say.tone-error { border-color: var(--bad); background: var(--bad-soft); }
+.kid-say.tone-call { border-color: color-mix(in srgb, var(--series-1) 60%, var(--border)); }
+
+/* ---------- helpers (recursion) */
+.kid-helpers { background: var(--surface); border: 1px dashed var(--border); border-radius: 12px; padding: 8px 10px; }
+.kid-tower { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.kid-helper { display: flex; gap: 8px; align-items: center; padding: 5px 10px; border-radius: 10px; background: var(--surface-2); font-size: 13px; opacity: 0.75; }
+.kid-helper.working { opacity: 1; background: var(--accent-soft); border: 1px solid var(--kid-look); animation: kid-in 0.25s ease-out; }
+.kid-helper code { font-family: var(--mono); font-size: 12px; }
+
+/* ---------- scene */
+.kid-scene { display: flex; flex-direction: column; gap: 12px; }
+.kid-thing { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px 12px; }
+.kid-thing.is-new { animation: kid-in 0.35s ease-out; }
+.kid-thing-title { font-weight: 600; font-size: 14px; margin-bottom: 8px; display: flex; gap: 8px; align-items: center; }
+.kid-new { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--new); }
+.kid-empty { color: var(--muted); font-style: italic; padding: 6px 2px; }
+.kid-scroll { overflow-x: auto; padding: 4px 2px 6px; }
+
+.kid-bubbles { display: flex; flex-wrap: wrap; gap: 8px; }
+.kid-bubble {
+  min-width: 64px; padding: 6px 12px; border-radius: 16px; text-align: center;
+  background: var(--surface); border: 2px solid var(--border);
+}
+.kid-bubble-name { font-size: 12px; color: var(--text-2); font-family: var(--mono); white-space: nowrap; }
+.kid-bubble-val { font-size: 22px; font-weight: 700; font-family: var(--mono); }
+.kid-bubble.changed { border-color: var(--kid-look); background: var(--accent-soft); animation: kid-pop 0.4s ease-out; }
+
+/* blocks: row 1 = characters, row 2 = blocks, row 3 = box numbers */
+.kid-blocks { display: grid; column-gap: 6px; row-gap: 2px; align-items: end; width: max-content; }
+.kid-block {
+  position: relative; height: 52px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font: 700 19px/1 var(--mono);
+  background: color-mix(in srgb, var(--kid-seq) var(--fill, 30%), var(--surface));
+  border: 2px solid color-mix(in srgb, var(--kid-seq) 45%, var(--border));
+  box-shadow: 0 3px 0 color-mix(in srgb, var(--kid-seq) 35%, var(--border));
+}
+.kid-block.letter { border-radius: 8px; background: color-mix(in srgb, var(--series-4) 25%, var(--surface)); border-color: color-mix(in srgb, var(--series-4) 50%, var(--border)); box-shadow: 0 3px 0 color-mix(in srgb, var(--series-4) 40%, var(--border)); }
+.kid-block-val { max-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; }
+.kid-block.look { border-color: var(--kid-look); box-shadow: 0 0 0 3px color-mix(in srgb, var(--kid-look) 45%, transparent), 0 3px 0 var(--kid-look); animation: kid-glow 1.2s ease-in-out infinite; }
+.kid-block.pop { animation: kid-pop 0.45s ease-out; border-color: var(--kid-look); }
+.kid-block.ghost { background: transparent; border: 2px dashed var(--bad); box-shadow: none; font-size: 20px; }
+.kid-block.more { background: transparent; border: 2px dashed var(--border); box-shadow: none; font-size: 13px; color: var(--muted); }
+.kid-block-idx { text-align: center; font-size: 11px; color: var(--muted); font-family: var(--mono); padding-top: 3px; }
+
+/* pointer markers: name tag + caret pointing at the block below */
+.kid-markers { display: flex; flex-direction: column-reverse; align-items: center; gap: 2px; }
+.kid-marker { display: flex; flex-direction: column; align-items: center; line-height: 1; }
+.kid-marker.hop { animation: kid-hop 0.45s ease-out; }
+.kid-marker-name {
+  font: 700 12px/1 var(--mono); color: #1a1a1a; background: var(--kid-look);
+  padding: 3px 7px; border-radius: 6px; white-space: nowrap;
+}
+.kid-marker-caret { width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 6px solid var(--kid-look); margin-bottom: 2px; }
+.kid-bubble.ptr .kid-bubble-name { color: var(--kid-look); font-weight: 700; }
+
+.kid-queue-labels { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); max-width: 420px; }
+
+/* stack of plates */
+.kid-plates { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.kid-plate {
+  min-width: 120px; padding: 7px 16px; border-radius: 999px; font: 700 16px var(--mono); text-align: center;
+  background: color-mix(in srgb, var(--series-3) 22%, var(--surface)); border: 2px solid color-mix(in srgb, var(--series-3) 50%, var(--border));
+}
+.kid-plate:first-child { border-color: var(--kid-look); }
+.kid-plate.pop { animation: kid-drop 0.4s ease-out; }
+
+/* grid of tiles */
+.kid-tiles { display: flex; flex-direction: column; gap: 4px; width: max-content; }
+.kid-tile-row { display: flex; gap: 4px; }
+.kid-tile {
+  width: 38px; height: 38px; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+  font: 700 15px var(--mono);
+  background: color-mix(in srgb, var(--tile, var(--series-1)) 30%, var(--surface));
+  border: 2px solid color-mix(in srgb, var(--tile, var(--series-1)) 55%, var(--border));
+}
+.kid-tile.pop { animation: kid-pop 0.45s ease-out; }
+.kid-tile.here { border-color: var(--kid-look); box-shadow: 0 0 0 3px color-mix(in srgb, var(--kid-look) 45%, transparent); }
+
+/* notebook (dict) */
+.kid-notebook {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 10px 8px 26px; border-radius: 10px; position: relative;
+  background: repeating-linear-gradient(var(--surface-2) 0 33px, var(--border) 33px 34px);
+  border-left: 6px dotted var(--muted);
+}
+.kid-page { display: flex; align-items: center; gap: 10px; min-height: 30px; font: 600 16px var(--mono); position: relative; padding: 0 6px; border-radius: 8px; }
+.kid-page-key { color: var(--series-2); }
+.kid-page-arrow { color: var(--muted); }
+.kid-page.new { animation: kid-write 0.5s ease-out; background: var(--new); }
+.kid-page.pop { animation: kid-pop 0.4s ease-out; background: var(--changed); }
+.kid-page.look { outline: 2px solid var(--kid-look); }
+
+/* bag (set) */
+.kid-bag { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; border-radius: 0 0 30px 30px; border: 2px solid var(--border); border-top: 6px solid var(--muted); background: var(--surface-2); }
+.kid-marble { min-width: 36px; height: 36px; padding: 0 8px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; font: 700 14px var(--mono); background: color-mix(in srgb, var(--series-3) 30%, var(--surface)); border: 2px solid color-mix(in srgb, var(--series-3) 60%, var(--border)); }
+.kid-marble.pop { animation: kid-drop 0.45s ease-out; }
+
+/* train (linked list) */
+.kid-train { display: flex; align-items: flex-end; gap: 0; width: max-content; padding-top: 4px; }
+.kid-car-wrap { display: flex; flex-direction: column; align-items: center; }
+.kid-car {
+  min-width: 52px; height: 42px; padding: 0 10px; border-radius: 10px 10px 4px 4px; display: flex; align-items: center; justify-content: center;
+  font: 700 18px var(--mono);
+  background: color-mix(in srgb, var(--series-2) 25%, var(--surface)); border: 2px solid color-mix(in srgb, var(--series-2) 60%, var(--border));
+}
+.kid-car.look { border-color: var(--kid-look); box-shadow: 0 0 0 3px color-mix(in srgb, var(--kid-look) 40%, transparent); }
+.kid-wheels { display: flex; gap: 14px; margin-top: -4px; }
+.kid-wheels span { width: 12px; height: 12px; border-radius: 50%; background: var(--text-2); border: 2px solid var(--surface); }
+.kid-hitch { align-self: center; padding: 0 2px; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
+.kid-hitch.warn { color: var(--bad); font-size: 12px; }
+.kid-end { align-self: center; margin-bottom: 8px; font-size: 13px; }
+
+/* tree */
+.kid-tree .kid-branch { stroke: color-mix(in srgb, var(--series-3) 60%, var(--border)); stroke-width: 3; stroke-linecap: round; }
+.kid-tree circle { fill: color-mix(in srgb, var(--series-3) 25%, var(--surface)); stroke: color-mix(in srgb, var(--series-3) 65%, var(--border)); stroke-width: 2.5; }
+.kid-tree .look circle { stroke: var(--kid-look); stroke-width: 4; }
+.kid-leaf-val { font: 700 14px var(--mono); fill: var(--text); }
+.kid-leaf-marker { font: 700 11px var(--mono); fill: var(--kid-look); }
+
+/* answer */
+.kid-gift { display: flex; flex-direction: column; gap: 2px; padding: 12px 16px; border-radius: 16px; border: 2px solid var(--good); background: color-mix(in srgb, var(--good) 10%, var(--surface)); animation: kid-pop 0.5s ease-out; }
+.kid-gift-val { font: 700 22px var(--mono); }
+.kid-gift-val.fail { color: var(--bad); font-size: 15px; }
+
+/* ---------- compare: race + dots */
+.kid-race, .kid-dots { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; margin-top: 12px; }
+.kid-race-title { font-weight: 700; font-size: 15px; margin-bottom: 10px; }
+.kid-lane { display: grid; grid-template-columns: 150px 1fr; gap: 2px 10px; align-items: center; margin-bottom: 10px; }
+.kid-lane-name { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; }
+.kid-track { position: relative; height: 40px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); margin-right: 16px; }
+.kid-trail { position: absolute; left: 0; top: 17px; height: 6px; border-radius: 3px; width: var(--to); opacity: 0.5; animation: kid-trail 2.2s linear both; }
+.kid-racer { position: absolute; top: 8px; left: calc(var(--to) - 12px); width: 24px; height: 24px; border-radius: 50%; border: 3px solid var(--surface); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); animation: kid-race 2.2s linear both; }
+.kid-flag { position: absolute; right: -14px; top: -1px; bottom: -1px; width: 10px; border-radius: 2px; background: repeating-conic-gradient(var(--text) 0 25%, var(--surface) 0 50%) 0 0 / 10px 10px; }
+.kid-lane-result { grid-column: 2; font-size: 12px; color: var(--text-2); animation: kid-in 0.3s ease-out 2.2s both; }
+
+.kid-dot-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 10px; }
+.kid-dot-panel { border: 1px solid var(--border); border-top: 4px solid var(--slot); border-radius: 10px; padding: 8px 10px; }
+.kid-dot-head { font-weight: 700; }
+.kid-dot-count { font: 700 15px var(--mono); margin: 4px 0 6px; }
+.kid-dotgrid { display: grid; gap: 2px; width: max-content; max-width: 100%; }
+.kid-dotgrid span { width: 8px; height: 8px; border-radius: 50%; animation: kid-in 0.3s ease-out both; }
+.kid-boom { font-weight: 700; color: var(--bad); padding: 10px 0; }
+
+.kid-cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); margin-top: 10px; }
+.kid-card { background: var(--surface); border: 1px solid var(--border); border-top: 4px solid var(--slot); border-radius: 12px; padding: 10px 12px; }
+.kid-card-head { display: flex; gap: 8px; align-items: center; font-weight: 700; }
+.kid-card-says { margin-top: 6px; font-size: 14px; }
+.kid-card-o { font: 600 12px var(--mono); color: var(--muted); margin-top: 4px; }
+
+/* ---------- motion */
+@keyframes kid-pop { 0% { transform: scale(0.85); } 55% { transform: scale(1.12); } 100% { transform: scale(1); } }
+@keyframes kid-hop { 0% { transform: translateX(var(--dx)) translateY(0); } 50% { transform: translateX(calc(var(--dx) / 2)) translateY(-14px); } 100% { transform: none; } }
+@keyframes kid-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes kid-write { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: none; } }
+@keyframes kid-drop { from { opacity: 0; transform: translateY(-18px); } to { opacity: 1; transform: none; } }
+@keyframes kid-glow { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--kid-look) 25%, transparent), 0 3px 0 var(--kid-look); } }
+@keyframes kid-race { from { left: -12px; } to { left: calc(var(--to) - 12px); } }
+@keyframes kid-trail { from { width: 0; } to { width: var(--to); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .kid *, .kid-race *, .kid-dots * { animation: none !important; }
+}
+
+/* mode switch */
+.mode-switch { border: 1px solid var(--border); background: var(--surface-2); border-radius: 999px; padding: 3px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.mode-switch:hover { border-color: var(--accent); }
+.player.big .btn.small { padding: 6px 12px; font-size: 15px; border-radius: 10px; }
