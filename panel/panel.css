@@ -284,3 +284,51 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--border)
 .lang-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
 .lang-list .chip.ok { color: var(--good, inherit); }
 .lang-list .chip.off { color: var(--muted); }
+
+/* ---------- interactive player extras */
+.player .row.tools { flex-wrap: wrap; margin-top: 6px; gap: 6px; }
+.chip-btn { border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.chip-btn:hover { border-color: var(--accent); color: var(--text); }
+.chip-btn.on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); font-weight: 600; }
+
+/* timeline: one button per bucket of steps */
+.timeline { display: flex; gap: 1px; height: 14px; margin-top: 8px; border-radius: 4px; overflow: hidden; }
+.timeline .tl { flex: 1; min-width: 0; border: 0; padding: 0; cursor: pointer; background: var(--surface-2); position: relative; }
+.timeline .tl:hover { filter: brightness(1.35); }
+.timeline .tl.tone-yes { background: color-mix(in srgb, var(--good) 55%, var(--surface-2)); }
+.timeline .tl.tone-no { background: color-mix(in srgb, var(--warn) 55%, var(--surface-2)); }
+.timeline .tl.tone-call { background: color-mix(in srgb, var(--series-1) 60%, var(--surface-2)); }
+.timeline .tl.tone-done { background: var(--good); }
+.timeline .tl.tone-error { background: var(--bad); }
+.timeline .tl.marked::before { content: ''; position: absolute; left: 50%; top: 0; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--text); }
+.timeline .tl.brk::after { content: ''; position: absolute; left: 50%; bottom: 0; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--bad); }
+.timeline .tl.here { box-shadow: inset 0 0 0 2px var(--accent); background: var(--accent); }
+
+.toast { margin-top: 6px; font-size: 12px; color: var(--text); background: var(--accent-soft); border-radius: 6px; padding: 4px 10px; animation: kid-in 0.2s ease-out; }
+
+/* code: click a line to jump, click the number for a stop */
+.code-line.jump { cursor: pointer; }
+.code-line.jump:hover { background: color-mix(in srgb, var(--accent-soft) 60%, transparent); }
+.code-line .ln { cursor: pointer; position: relative; }
+.code-line .ln:hover { color: var(--bad); }
+.code-line.brk .ln { color: var(--bad); font-weight: 700; }
+.code-line.brk .ln::before { content: '●'; position: absolute; left: 3px; color: var(--bad); font-size: 10px; }
+
+/* variable history */
+.watch { margin-top: 10px; border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.watch-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; }
+.watch-chip { font: 700 14px var(--mono); border: 2px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 10px; padding: 3px 9px; cursor: pointer; }
+.watch-chip:hover { border-color: var(--accent); }
+.watch-chip.cur { border-color: var(--accent); background: var(--accent-soft); }
+.watch-chip.future { opacity: 0.55; }
+.watch-arrow { color: var(--muted); font-size: 12px; }
+
+/* guess mode */
+.quiz { margin-top: 10px; border: 2px solid color-mix(in srgb, var(--series-1) 55%, var(--border)); animation: kid-in 0.25s ease-out; }
+.quiz.right { border-color: var(--good); background: color-mix(in srgb, var(--good) 8%, var(--surface)); }
+.quiz.wrong { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, var(--surface)); }
+.quiz-q { font-size: 15px; font-weight: 600; }
+.quiz-src { margin: 8px 0; }
+.quiz-src code { font-family: var(--mono); background: var(--surface-2); padding: 3px 8px; border-radius: 6px; }
+.quiz .row { margin-top: 8px; }
+.quiz-choice { font: 700 16px var(--mono); min-width: 56px; }

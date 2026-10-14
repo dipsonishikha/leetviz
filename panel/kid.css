@@ -187,3 +187,17 @@
 .mode-switch { border: 1px solid var(--border); background: var(--surface-2); border-radius: 999px; padding: 3px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; }
 .mode-switch:hover { border-color: var(--accent); }
 .player.big .btn.small { padding: 6px 12px; font-size: 15px; border-radius: 10px; }
+
+/* ---------- clickable variables (open their history) */
+.pickable { cursor: pointer; }
+.kid-bubble.pickable:hover, .kid-block.pickable:hover, .kid-page.pickable:hover { border-color: var(--kid-look); }
+.kid-thing-title.pickable:hover { color: var(--kid-look); }
+.pickable:focus-visible { outline: 2px solid var(--kid-look); outline-offset: 2px; }
+.kid-pick-hint { margin-left: auto; font-size: 11px; font-weight: 500; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 8px; }
+.kid-thing-title.pickable:hover .kid-pick-hint { border-color: var(--kid-look); color: var(--kid-look); }
+.kid-bubble.watched, .kid-block.watched, .kid-page.watched { outline: 3px solid var(--kid-look); outline-offset: 2px; }
+.kid-thing.watched { border-color: var(--kid-look); }
+/* hovering a variable lights up the same name everywhere */
+.kid-bubble.linked { border-color: var(--kid-look); }
+.kid-marker.linked .kid-marker-name { outline: 2px solid var(--text); }
+.kid-thing-title.linked { color: var(--kid-look); }

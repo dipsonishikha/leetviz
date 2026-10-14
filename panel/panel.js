@@ -43,6 +43,12 @@ const S = {
   error: null,
   server: null,        // /health answer from the language server
   settings: false,     // server settings box open?
+  watch: null,         // {name, fn}: variable whose history is open ("i", "nums[2]", "seen[5]")
+  breaks: new Set(),   // code lines where playing stops
+  guess: false,        // "guess first" mode: predict a value before each step is shown
+  quiz: null,          // the open guess: {kind, ..., step, picked?}
+  score: { right: 0, total: 0 },
+  toast: '',
 };
 
 // ------------------------------------------------------------------ engine
@@ -135,6 +141,9 @@ window.addEventListener('message', (ev) => {
     requests.delete(d.id);
   } else if (d.type === 'navigated') {
     loadContext();
+  } else if (d.type === 'lineClick' && S.trace?.steps.length) {
+    if (S.tab !== 'step') S.tab = 'step';
+    jumpToLine(d.line);
   }
 });
 
@@ -365,31 +374,267 @@ function renderStepTab() {
   setPointerMap(S.trace.pointerMap);
   if (S.trace.note) root.append(h('p', { class: 'hint' }, S.trace.note));
   if (S.kid) {
-    root.append(renderPlayer(), renderKidStep(S.trace, S.step));
+    root.append(renderPlayer(), renderQuiz() || '', renderWatch() || '',
+      renderKidStep(S.trace, S.step, { watch: S.watch?.name, onPick: pickVar }));
     const last = S.step === S.trace.steps.length - 1;
     if (last && (S.trace.error || S.trace.truncated)) root.append(renderResult());
     root.append(h('details', { class: 'kid-codebox', open: !embedded || undefined, style: { marginTop: '12px' } },
       h('summary', {}, 'Show the code (the line that just ran is highlighted)'), renderCode(kidLine())));
     return root;
   }
-  root.append(renderPlayer(), renderNarration());
+  root.append(renderPlayer(), renderQuiz() || '', renderNarration(), renderWatch() || '');
   root.append(h('div', { class: 'split' }, renderCode(), renderState()));
   return root;
 }
 
+function go(i) {
+  const n = S.trace.steps.length;
+  S.quiz = null;
+  S.step = Math.max(0, Math.min(n - 1, i));
+  render();
+}
+
+/** One step forward; in guess mode, ask first. */
+function forward() {
+  if (S.quiz && S.quiz.picked === undefined) return answerQuiz(null); // "just show me"
+  if (S.guess && !S.playing) {
+    const q = makeQuiz(S.step);
+    if (q) { S.quiz = q; return render(); }
+  }
+  go(S.step + 1);
+}
+
 function renderPlayer() {
   const n = S.trace.steps.length;
-  const go = (i) => { S.step = Math.max(0, Math.min(n - 1, i)); render(); };
   return h('div', { class: `player${S.kid ? ' big' : ''}` }, h('div', { class: 'row' },
-    h('button', { class: 'btn small', title: 'First step', onclick: () => go(0) }, '⏮'),
+    h('button', { class: 'btn small', title: 'First step (Home)', onclick: () => go(0) }, '⏮'),
     h('button', { class: 'btn small', title: 'Back (←)', onclick: () => go(S.step - 1) }, '◀'),
     h('button', { class: 'btn small primary', title: 'Play / pause (Space)', onclick: togglePlay }, S.playing ? '❚❚' : '▶'),
-    h('button', { class: 'btn small', title: 'Forward (→)', onclick: () => go(S.step + 1) }, '▶|'),
-    h('button', { class: 'btn small', title: 'Last step', onclick: () => go(n - 1) }, '⏭'),
+    h('button', { class: 'btn small', title: 'Forward (→)', onclick: forward }, '▶|'),
+    h('button', { class: 'btn small', title: 'Last step (End)', onclick: () => go(n - 1) }, '⏭'),
     h('input', { type: 'range', min: 0, max: n - 1, value: S.step, oninput: (e) => go(+e.target.value) }),
     h('span', { class: 'step-count' }, `${S.step + 1} / ${n}`),
     h('select', { title: 'Speed', onchange: (e) => { S.speed = +e.target.value; if (S.playing) { togglePlay(); togglePlay(); } } },
-      [[900, '0.5×'], [450, '1×'], [180, '2×'], [50, '5×']].map(([v, l]) => h('option', { value: v, selected: v === S.speed }, l)))));
+      [[900, '0.5×'], [450, '1×'], [180, '2×'], [50, '5×']].map(([v, l]) => h('option', { value: v, selected: v === S.speed }, l)))),
+    renderTimeline(),
+    h('div', { class: 'row tools' },
+      h('button', { class: `chip-btn${S.guess ? ' on' : ''}`, title: 'Before each step, guess what will happen', onclick: () => { S.guess = !S.guess; S.quiz = null; if (S.guess && S.playing) togglePlay(); render(); } },
+        S.guess ? '✔ Guess mode' : 'Guess mode'),
+      S.score.total ? h('span', { class: 'hint' }, `${S.score.right} of ${S.score.total} guesses right`) : null,
+      h('span', { class: 'spacer' }),
+      S.breaks.size
+        ? [h('span', { class: 'hint' }, `▶ stops at line${S.breaks.size > 1 ? 's' : ''} ${[...S.breaks].sort((a, b) => a - b).join(', ')}`),
+          h('button', { class: 'chip-btn', onclick: () => { S.breaks.clear(); render(); } }, 'clear stops')]
+        : h('span', { class: 'hint' }, 'Click a variable to see its history · click a code line to jump there')),
+    S.toast ? h('div', { class: 'toast' }, S.toast) : null);
+}
+
+// ---------- interactive pieces
+
+let toastTimer;
+function flash(msg) {
+  S.toast = msg;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { S.toast = ''; render(); }, 2600);
+}
+
+// Timeline: the run squeezed into a strip of buckets, colored by what happened there.
+const TONE_RANK = { error: 5, done: 4, call: 3, no: 2, yes: 1, info: 0 };
+function moments() {
+  const t = S.trace;
+  if (!t.moments) {
+    t.moments = t.steps.map((_, i) => {
+      try { return narrate(t, i).tone; } catch { return 'info'; }
+    });
+  }
+  return t.moments;
+}
+
+function renderTimeline() {
+  const t = S.trace;
+  const n = t.steps.length;
+  if (n < 2) return null;
+  const tones = moments();
+  const B = Math.min(n, 120);
+  const bucketOf = (i) => Math.floor((i * B) / n);
+  const buckets = Array.from({ length: B }, () => ({ first: null, best: null, tone: 'info' }));
+  tones.forEach((tone, i) => {
+    const b = buckets[bucketOf(i)];
+    if (b.first === null) b.first = i;
+    if (b.best === null || TONE_RANK[tone] > TONE_RANK[b.tone]) { b.best = i; b.tone = tone; }
+  });
+  const breakSteps = new Set();
+  if (S.breaks.size) t.steps.forEach((_, i) => { if (stopsAt(i)) breakSteps.add(bucketOf(i)); });
+  const watchSteps = new Set(S.watch ? watchHistory().map((c) => bucketOf(c.i)) : []);
+  const here = bucketOf(S.step);
+  return h('div', { class: 'timeline', role: 'group', 'aria-label': 'Timeline — click to jump' },
+    buckets.map((b, k) => h('button', {
+      class: `tl tone-${b.tone}${k === here ? ' here' : ''}${breakSteps.has(k) ? ' brk' : ''}${watchSteps.has(k) ? ' marked' : ''}`,
+      onmouseenter: (e) => { if (!e.currentTarget.title) e.currentTarget.title = `Step ${b.best + 1}: ${narrationText(narrate(t, b.best))}`; },
+      onclick: () => go(TONE_RANK[b.tone] ? b.best : b.first),
+    })));
+}
+
+/** The code line a step "shows" (simple view: the line that just ran). */
+function shownLine(i) {
+  const t = S.trace;
+  if (!S.kid) return t.steps[i].line;
+  const a = t.steps[i - 1];
+  return a && a.event === 'line' ? a.line : null;
+}
+const stopsAt = (i) => S.breaks.has(shownLine(i));
+
+function jumpToLine(line) {
+  const t = S.trace;
+  if (!t?.steps.length) return;
+  const n = t.steps.length;
+  const runs = [];
+  t.steps.forEach((st, j) => { if (st.event === 'line' && st.line === line) runs.push(S.kid ? Math.min(j + 1, n - 1) : j); });
+  if (!runs.length) { flash(`Line ${line} never runs for this input.`); return render(); }
+  if (S.playing) togglePlay();
+  const next = runs.find((i) => i > S.step) ?? runs[0];
+  S.quiz = null;
+  S.step = next;
+  flash(runs.length === 1 ? `Line ${line} runs once — here it is.` : `Line ${line} runs ${runs.length} times — this is time ${runs.indexOf(next) + 1}. Click again for the next.`);
+  render();
+}
+
+function toggleBreak(line) {
+  if (S.breaks.has(line)) S.breaks.delete(line);
+  else S.breaks.add(line);
+  render();
+}
+
+// Variable history ("watch")
+function pickVar(name) {
+  if (S.watch?.name === name) S.watch = null;
+  else S.watch = { name, fn: innermost(S.trace.steps[S.step]).fn };
+  render();
+}
+
+function watchedValue(step, name) {
+  const locals = innermost(step).locals || {};
+  const m = name.match(/^(\w+)\[(.+)\]$/);
+  if (!m) return locals[name];
+  const v = locals[m[1]];
+  if (v?.t === 'list') return v.items[+m[2]];
+  if (v?.t === 'dict') return v.entries.find(([k]) => k === m[2])?.[1];
+  return undefined;
+}
+
+/** [{i, v}] — every step where the watched value changed (or first appeared). */
+function watchHistory() {
+  const t = S.trace;
+  const key = `${S.watch.fn}:${S.watch.name}:${S.kid}`;
+  if (t.watchCache?.key === key) return t.watchCache.list;
+  const list = [];
+  let last;
+  t.steps.forEach((st, i) => {
+    if (innermost(st).fn !== S.watch.fn) return;
+    const v = watchedValue(st, S.watch.name);
+    const k = v === undefined ? undefined : JSON.stringify(v);
+    if (k !== last) { if (v !== undefined) list.push({ i, v }); last = k; }
+  });
+  t.watchCache = { key, list };
+  return list;
+}
+
+function renderWatch() {
+  if (!S.watch) return null;
+  const list = watchHistory();
+  const name = S.watch.name;
+  const close = h('button', { class: 'icon-btn', title: 'Close (Esc)', onclick: () => { S.watch = null; render(); } }, '✕');
+  if (!list.length) return h('div', { class: 'watch card' }, h('div', { class: 'row' }, h('b', {}, h('code', {}, name)), h('span', { class: 'hint' }, 'never had a value here'), h('span', { class: 'spacer' }), close));
+  let cur = -1;
+  list.forEach((c, k) => { if (c.i <= S.step) cur = k; });
+  const prev = cur > 0 ? list[cur - 1] : null;
+  const next = list[cur + 1];
+  const lo = Math.max(0, Math.min(cur - 30, list.length - 60));
+  const shown = list.slice(lo, lo + 60);
+  const label = (v) => (v.t === 'prim' ? (v.k === 'null' || v.v === 'None' ? '∅' : v.v) : summarize(v, 18));
+  return h('div', { class: 'watch card' },
+    h('div', { class: 'row' },
+      h('b', {}, h('code', {}, name), ' over time'),
+      h('span', { class: 'hint' }, list.length === 1 ? 'set once, never changed' : `changed ${list.length - 1} time${list.length === 2 ? '' : 's'}`),
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'btn small', disabled: !prev, title: 'Jump to the previous change', onclick: () => prev && go(prev.i) }, '◀ previous change'),
+      h('button', { class: 'btn small', disabled: !next, title: 'Jump to the next change', onclick: () => next && go(next.i) }, 'next change ▶'),
+      close),
+    h('div', { class: 'watch-strip' },
+      lo > 0 ? h('span', { class: 'hint' }, '…') : null,
+      shown.map((c, k) => [k || lo ? h('span', { class: 'watch-arrow' }, '→') : null,
+        h('button', { class: `watch-chip${lo + k === cur ? ' cur' : ''}${lo + k > cur ? ' future' : ''}`, title: `Step ${c.i + 1} — click to jump here`, onclick: () => go(c.i) }, label(c.v))]),
+      lo + shown.length < list.length ? h('span', { class: 'hint' }, '…') : null));
+}
+
+// Guess mode
+function shuffle(a) {
+  for (let k = a.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [a[k], a[j]] = [a[j], a[k]]; }
+  return a;
+}
+
+/** A question about the step from i to i+1, or null if nothing guessable happens. */
+function makeQuiz(i) {
+  const t = S.trace;
+  const a = t.steps[i];
+  const b = t.steps[i + 1];
+  if (!b || a.event !== 'line' || a.stack.length !== b.stack.length) return null;
+  const src = (t.code.split('\n')[a.line - 1] || '').trim();
+  const before = innermost(a).locals || {};
+  const after = innermost(b).locals || {};
+  for (const [k, v] of Object.entries(after)) {
+    const o = before[k];
+    if (v.t !== 'prim' || v.v.startsWith('<')) continue;
+    if (o && JSON.stringify(o) === JSON.stringify(v)) continue;
+    const isBool = v.k === 'bool' || v.v === 'True' || v.v === 'False';
+    let choices;
+    if (isBool) choices = v.v === 'True' || v.v === 'False' ? ['True', 'False'] : ['true', 'false'];
+    else {
+      const set = new Set([v.v]);
+      if (o?.t === 'prim' && !o.v.startsWith('<')) set.add(o.v);
+      if (typeof v.num === 'number') for (const d of [1, -1, 2, -2]) { if (set.size >= 3) break; set.add(String(v.num + d)); }
+      for (const x of Object.values(after)) { if (set.size >= 3) break; if (x.t === 'prim' && !x.v.startsWith('<') && x.v.length < 12) set.add(x.v); }
+      choices = [...set];
+      choices = choices.every((c) => !Number.isNaN(+c)) ? choices.sort((x, y) => +x - +y) : shuffle(choices);
+    }
+    return { kind: 'value', name: k, was: o?.t === 'prim' ? o.v : null, answer: v.v, choices, src, step: i + 1 };
+  }
+  const tone = moments()[i + 1];
+  if (tone === 'yes' || tone === 'no') return { kind: 'yesno', answer: tone === 'yes' ? 'Yes' : 'No', choices: ['Yes', 'No'], src, step: i + 1 };
+  return null;
+}
+
+function answerQuiz(choice) {
+  const q = S.quiz;
+  q.picked = choice;
+  if (choice !== null) {
+    S.score.total++;
+    if (choice === q.answer) S.score.right++;
+  }
+  S.step = q.step;
+  render();
+}
+
+function renderQuiz() {
+  const q = S.quiz;
+  if (!q) return null;
+  const ask = q.kind === 'value'
+    ? ['What will ', h('code', {}, q.name), ' be after this line runs?']
+    : ['Will the answer to this check be yes or no?'];
+  if (q.picked === undefined) {
+    return h('div', { class: 'quiz card' },
+      h('div', { class: 'quiz-q' }, 'Guess first! ', ask),
+      h('div', { class: 'quiz-src' }, h('code', {}, q.src)),
+      q.kind === 'value' && q.was !== null ? h('div', { class: 'hint' }, `Right now ${q.name} is ${q.was}.`) : null,
+      h('div', { class: 'row' }, q.choices.map((c) => h('button', { class: 'btn quiz-choice', onclick: () => answerQuiz(c) }, c)),
+        h('span', { class: 'spacer' }), h('button', { class: 'chip-btn', onclick: () => answerQuiz(null) }, 'just show me')));
+  }
+  const right = q.picked === q.answer;
+  return h('div', { class: `quiz card ${q.picked === null ? '' : right ? 'right' : 'wrong'}` },
+    q.picked === null ? h('div', {}, 'The answer: ', h('b', {}, q.answer))
+      : right ? h('div', {}, h('b', {}, '✅ Right! '), q.kind === 'value' ? [h('code', {}, q.name), ' is now ', h('b', {}, q.answer)] : ['The answer is ', h('b', {}, q.answer)])
+        : h('div', {}, h('b', {}, '❌ Not quite. '), 'You said ', h('b', {}, q.picked), ', but it’s ', h('b', {}, q.answer), '. Look at the picture to see why.'),
+    h('div', { class: 'hint' }, 'Press ▶| or → for the next guess.'));
 }
 
 function togglePlay() {
@@ -400,6 +645,8 @@ function togglePlay() {
     S.timer = setInterval(() => {
       if (!S.trace || S.step >= S.trace.steps.length - 1) { S.playing = false; clearInterval(S.timer); render(); return; }
       S.step++;
+      S.quiz = null;
+      if (stopsAt(S.step)) { S.playing = false; clearInterval(S.timer); flash(`Stopped at line ${shownLine(S.step)}.`); }
       render();
     }, S.speed);
   }
@@ -476,11 +723,12 @@ function renderCode(highlight = null) {
       t.code.split('\n').map((src, i) => {
         const ln = i + 1;
         const cls = ln === errLine ? 'err' : ln === step.line ? 'cur' : ln === prevLine ? 'prev' : '';
-        return h('div', { class: `code-line ${cls}` }, h('span', { class: 'ln' }, ln),
+        return h('div', { class: `code-line ${cls}${S.breaks.has(ln) ? ' brk' : ''} jump`, title: `Click: jump to when line ${ln} runs`, onclick: () => jumpToLine(ln) },
+          h('span', { class: 'ln', title: S.breaks.has(ln) ? 'Remove the stop' : 'Click: stop here when playing', onclick: (e) => { e.stopPropagation(); toggleBreak(ln); } }, ln),
           h('span', { class: 'hits' }, hits[ln] ? [h('span', { class: 'bar', style: { width: `${(hits[ln] / maxHits) * 36}px` } }), `${hits[ln]}×`] : ''),
           h('span', { class: 'src' }, src || ' '));
       })),
-    h('div', { class: 'hint', style: { marginTop: '4px' } }, 'Orange bar = how many times each line has run. Hot lines are where the time goes.'));
+    h('div', { class: 'hint', style: { marginTop: '4px' } }, 'Orange bar = how many times each line has run. Click a line to jump to it; click its number to add a stop (●) for ▶.'));
 }
 
 function renderState() {
@@ -548,6 +796,10 @@ function mirrorToEditor() {
   const step = t.steps[S.step];
   const frame = innermost(step);
   const isErr = step.event === 'exception';
+  if (S.quiz && S.quiz.picked === undefined) {
+    parentSend('decorate', { line: step.line, inline: S.quiz.kind === 'value' ? `Guess: what will ${S.quiz.name} be?` : 'Guess: yes or no?' });
+    return;
+  }
   if (S.kid) {
     parentSend('decorate', { line: isErr ? step.line : kidLine(), inline: narrationText(narrate(t, S.step)).slice(0, 110), error: isErr });
     return;
@@ -580,6 +832,7 @@ async function runTrace() {
     const r = await engineFor([appr.lang]).call('trace', enginePayload({ code: appr.code, lang: appr.lang, args, maxSteps: 5000 }));
     S.trace = { ...r, code: appr.code, approachId: appr.id, lang: appr.lang };
     S.collapsed = {};
+    S.quiz = null;
     // Start at the beginning, or jump straight to the crash so the bug is in view.
     S.step = r.error && r.steps.length ? r.steps.length - 1 : 0;
   } catch (e) {
@@ -957,15 +1210,34 @@ if (!embedded) document.getElementById('close').hidden = true;
 
 document.addEventListener('keydown', (e) => {
   if (e.target.closest?.('input, textarea, select') || S.tab !== 'step' || !S.trace?.steps.length) return;
+  if ((e.key === ' ' || e.key === 'Enter') && e.target.closest?.('button, [role=button]')) return; // let the focused control handle it
   const n = S.trace.steps.length;
-  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+  if (e.key === 'ArrowRight') {
     e.preventDefault();
-    S.step = Math.max(0, Math.min(n - 1, S.step + (e.key === 'ArrowRight' ? 1 : -1)));
+    forward();
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    go(S.step - 1);
+  } else if (e.key === 'Home' || e.key === 'End') {
+    e.preventDefault();
+    go(e.key === 'Home' ? 0 : n - 1);
+  } else if (e.key === 'Escape' && (S.watch || S.quiz)) {
+    S.watch = null;
+    S.quiz = null;
     render();
   } else if (e.key === ' ') {
     e.preventDefault();
     togglePlay();
   }
+});
+
+// Hovering a variable lights up everything with the same name (bubble, markers, title).
+main.addEventListener('mouseover', (e) => {
+  const name = e.target.closest?.('[data-var]')?.dataset.var || '';
+  if (name === (main.dataset.hover || '')) return;
+  for (const x of main.querySelectorAll('.linked')) x.classList.remove('linked');
+  main.dataset.hover = name;
+  if (name) for (const x of main.querySelectorAll('[data-var]')) if (x.dataset.var === name) x.classList.add('linked');
 });
 
 loadContext();

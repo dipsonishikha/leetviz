@@ -96,6 +96,10 @@
 
   window.addEventListener('message', (ev) => {
     const d = ev.data;
+    if (ev.source === window && d?.source === 'leetviz-main' && d.type === 'lineClick') {
+      if (iframe && open) iframe.contentWindow.postMessage({ lv: true, type: 'lineClick', line: d.line }, PANEL_ORIGIN);
+      return;
+    }
     if (ev.source === window && d?.source === 'leetviz-main' && waiting.has(d.id)) {
       waiting.get(d.id)(d);
       waiting.delete(d.id);

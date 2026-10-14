@@ -5,6 +5,19 @@
   window.__leetvizMain = true;
 
   let decorations = null;
+  let tracing = false;      // the panel has a run on screen: line-number clicks jump to that line
+  const hooked = new WeakSet();
+
+  function hookClicks(ed) {
+    if (hooked.has(ed)) return;
+    hooked.add(ed);
+    ed.onMouseDown((e) => {
+      const T = window.monaco.editor.MouseTargetType;
+      if (!tracing || !e.target.position) return;
+      if (e.target.type !== T.GUTTER_LINE_NUMBERS && e.target.type !== T.GUTTER_LINE_DECORATIONS) return;
+      window.postMessage({ source: 'leetviz-main', type: 'lineClick', line: e.target.position.lineNumber }, location.origin);
+    });
+  }
 
   // LeetCode can have several Monaco editors (code, testcase input); the code one is the
   // editable editor holding the most code.
@@ -43,7 +56,9 @@
     if (!ed) return;
     decorations?.clear();
     decorations = null;
+    tracing = !!line;
     if (!line) return;
+    hookClicks(ed);
     const model = ed.getModel();
     if (line > model.getLineCount()) return;
     const { Range } = window.monaco;

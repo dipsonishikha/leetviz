@@ -8,7 +8,7 @@ const CELL = 58; // block width + gap, used to slide markers between blocks
 
 /** A pointer marker: the variable's name on a tag with a caret pointing down at its block. */
 function marker(name, extra = {}) {
-  return h('div', { class: `kid-marker${extra.hop ? ' hop' : ''}`, style: extra.style || {}, title: extra.title || name },
+  return h('div', { class: `kid-marker${extra.hop ? ' hop' : ''}`, 'data-var': name, style: extra.style || {}, title: extra.title || name },
     h('span', { class: 'kid-marker-name' }, name), h('span', { class: 'kid-marker-caret' }));
 }
 
@@ -319,7 +319,11 @@ export function narrationText(n) {
 
 // ------------------------------------------------------------------ the picture
 
-export function renderKidStep(t, i) {
+/**
+ * @param opts.watch  variable whose history is open (drawn with a ring)
+ * @param opts.onPick called with a variable name when the learner clicks it
+ */
+export function renderKidStep(t, i, opts = {}) {
   const cur = t.steps[i];
   const n = narrate(t, i);
   const action = actionStep(t, i);
@@ -328,7 +332,7 @@ export function renderKidStep(t, i) {
   root.append(h('div', { class: `kid-say tone-${n.tone}` }, h('div', { class: 'kid-say-text' }, n.parts)));
   if (cur.stack.length > 1) root.append(renderHelpers(cur));
   const f = frameOf(cur);
-  if (f.locals) root.append(renderScene(f.locals, previousLocals(t, i), looks, cur.stack));
+  if (f.locals) root.append(renderScene(f.locals, previousLocals(t, i), looks, cur.stack, opts));
   if (cur.event === 'return' && cur.stack.length === 1) {
     root.append(h('div', { class: 'kid-gift' }, h('div', { class: 'kid-small' }, 'The answer'), h('div', { class: 'kid-gift-val' }, plainValue(cur.ret))));
   }
@@ -352,7 +356,16 @@ function renderHelpers(step) {
       hidden ? h('div', { class: 'kid-small' }, `…and ${hidden} more below`) : null));
 }
 
-function renderScene(locals, prev, looks, stack) {
+/** Click/keyboard props that make a variable pickable (opens its history). */
+function pickable(k, opts, cls) {
+  if (!opts.onPick) return { class: cls };
+  return { class: `${cls} pickable${opts.watch === k ? ' watched' : ''}`, 'data-var': k, tabindex: 0, role: 'button',
+    title: `Click to see every value ${k} had`,
+    onclick: (e) => { e.stopPropagation(); opts.onPick(k); },
+    onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); opts.onPick(k); } } };
+}
+
+function renderScene(locals, prev, looks, stack, opts = {}) {
   const scene = h('div', { class: 'kid-scene' });
   const names = Object.keys(locals).filter((k) => !(locals[k].t === 'prim' && locals[k].v.startsWith('<function')));
   const ints = {};
@@ -370,7 +383,7 @@ function renderScene(locals, prev, looks, stack) {
       if (isTrue(v)) shown = 'yes ✅';
       if (isFalse(v)) shown = 'no ❌';
       if (isNull(v)) shown = '∅';
-      return h('div', { class: `kid-bubble${changed ? ' changed' : ''}${isPtr ? ' ptr' : ''}` },
+      return h('div', pickable(k, opts, `kid-bubble${changed ? ' changed' : ''}${isPtr ? ' ptr' : ''}`),
         h('div', { class: 'kid-bubble-name' }, k),
         h('div', { class: 'kid-bubble-val' }, shown),
         changed && o && o.t === 'prim' ? h('div', { class: 'kid-small' }, `was ${o.v}`) : null);
@@ -414,14 +427,14 @@ function renderScene(locals, prev, looks, stack) {
         body = renderPlates(items, oldItems);
       } else if (v.kind === 'deque' || /^(q|queue|dq|bfs)$/i.test(k)) {
         title = `${k} — a line (in at the back, out at the front)`;
-        body = renderBlocks(k, items, len, oldItems, ints, prev, looks, { queue: true });
+        body = renderBlocks(k, items, len, oldItems, ints, prev, looks, { queue: true, pick: opts });
       } else {
         title = v.t === 'str' ? `${k} — letter tiles` : `${k} — ${len} block${len === 1 ? '' : 's'}`;
-        body = renderBlocks(k, items, len, oldItems, ints, prev, looks, { letters: v.t === 'str' });
+        body = renderBlocks(k, items, len, oldItems, ints, prev, looks, { letters: v.t === 'str', pick: opts });
       }
     } else if (v.t === 'dict') {
       title = `${k} — notebook (${v.len} page${v.len === 1 ? '' : 's'})`;
-      body = renderNotebook(v, o, looks.filter((l) => l[0] === k).map((l) => l[1]));
+      body = renderNotebook(v, o, looks.filter((l) => l[0] === k).map((l) => l[1]), k, opts);
     } else if (v.t === 'set') {
       title = `${k} — bag (${v.len} item${v.len === 1 ? '' : 's'})`;
       body = renderBag(v, o);
@@ -437,7 +450,9 @@ function renderScene(locals, prev, looks, stack) {
       body = h('div', { class: 'kid-small' }, summarize(v, 120));
     }
     if (!body) continue;
-    scene.append(h('div', { class: `kid-thing${isNew ? ' is-new' : ''}` }, h('div', { class: 'kid-thing-title' }, title, isNew ? h('span', { class: 'kid-new' }, 'new') : null), body));
+    scene.append(h('div', { class: `kid-thing${isNew ? ' is-new' : ''}${opts.watch === k ? ' watched' : ''}` },
+      h('div', pickable(k, opts, 'kid-thing-title'), title, isNew ? h('span', { class: 'kid-new' }, 'new') : null,
+        opts.onPick ? h('span', { class: 'kid-pick-hint' }, 'history') : null), body));
   }
   return scene;
 }
@@ -474,8 +489,9 @@ function renderBlocks(name, items, len, oldItems, ints, prev, looks, opts = {}) 
   shown.forEach((it, k) => {
     const changed = oldItems && (k >= oldItems.length || JSON.stringify(oldItems[k]) !== JSON.stringify(it));
     const label = it.t === 'prim' || it.t === 'str' ? (it.t === 'str' ? it.v : it.v) : summarize(it, 10);
-    grid.append(h('div', { class: `kid-block${changed ? ' pop' : ''}${lookAt.has(k) ? ' look' : ''}${opts.letters ? ' letter' : ''}`,
-      style: { gridColumn: `${k + 1}`, gridRow: '2', '--fill': `${tone(k)}%` }, title: `box #${k}` },
+    const cls = `kid-block${changed ? ' pop' : ''}${lookAt.has(k) ? ' look' : ''}${opts.letters ? ' letter' : ''}`;
+    const pick = opts.pick?.onPick && !opts.letters ? pickable(`${name}[${k}]`, opts.pick, cls) : { class: cls };
+    grid.append(h('div', { ...pick, style: { gridColumn: `${k + 1}`, gridRow: '2', '--fill': `${tone(k)}%` }, title: pick.title ? `box #${k} — click to see what this box held over time` : `box #${k}` },
       h('span', { class: 'kid-block-val' }, label)));
     grid.append(h('div', { class: 'kid-block-idx', style: { gridColumn: `${k + 1}`, gridRow: '3' } }, `#${k}`));
   });
@@ -516,14 +532,15 @@ function renderTiles(v, old, ints, looks) {
     })))));
 }
 
-function renderNotebook(v, old, lookKeys) {
+function renderNotebook(v, old, lookKeys, name, opts = {}) {
   if (!v.entries.length) return h('div', { class: 'kid-notebook' }, h('div', { class: 'kid-empty' }, 'blank pages — nothing written yet'));
   const before = new Map(old?.t === 'dict' ? old.entries : []);
   const looking = new Set(lookKeys.map((k) => (typeof k === 'string' ? `'${k}'` : String(k))));
   return h('div', { class: 'kid-notebook' }, v.entries.map(([k, x]) => {
     const isNew = old && !before.has(k);
     const changed = old && !isNew && JSON.stringify(before.get(k)) !== JSON.stringify(x);
-    return h('div', { class: `kid-page${isNew ? ' new' : ''}${changed ? ' pop' : ''}${looking.has(k) ? ' look' : ''}` },
+    const cls = `kid-page${isNew ? ' new' : ''}${changed ? ' pop' : ''}${looking.has(k) ? ' look' : ''}`;
+    return h('div', name && opts.onPick ? pickable(`${name}[${k}]`, opts, cls) : { class: cls },
       h('span', { class: 'kid-page-key' }, k), h('span', { class: 'kid-page-arrow' }, '➜'), h('span', { class: 'kid-page-val' }, summarize(x, 30)));
   }), v.len > v.entries.length ? h('div', { class: 'kid-small' }, `+${v.len - v.entries.length} more pages`) : null);
 }
