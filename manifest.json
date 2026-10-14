@@ -1,26 +1,43 @@
 {
   "manifest_version": 3,
   "name": "LeetViz — step-through & complexity visualizer",
-  "version": "0.1.0",
-  "description": "Step through your LeetCode solution line by line, find bugs with random tests, and compare brute / better / optimal approaches by measured time and space.",
+  "version": "0.2.0",
+  "description": "Step through your LeetCode solution line by line in any LeetCode language, find bugs with random tests, and compare brute / better / optimal approaches by measured time and space.",
   "content_scripts": [
     {
-      "matches": ["https://leetcode.com/problems/*", "https://leetcode.cn/problems/*"],
-      "js": ["content/main-world.js"],
+      "matches": [
+        "https://leetcode.com/problems/*",
+        "https://leetcode.cn/problems/*"
+      ],
+      "js": [
+        "content/main-world.js"
+      ],
       "world": "MAIN",
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://leetcode.com/problems/*", "https://leetcode.cn/problems/*"],
-      "js": ["content/content.js"],
-      "css": ["content/content.css"],
+      "matches": [
+        "https://leetcode.com/problems/*",
+        "https://leetcode.cn/problems/*"
+      ],
+      "js": [
+        "content/content.js"
+      ],
+      "css": [
+        "content/content.css"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["panel/panel.html"],
-      "matches": ["https://leetcode.com/*", "https://leetcode.cn/*"]
+      "resources": [
+        "panel/panel.html"
+      ],
+      "matches": [
+        "https://leetcode.com/*",
+        "https://leetcode.cn/*"
+      ]
     }
   ],
   "content_security_policy": {

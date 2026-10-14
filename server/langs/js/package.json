@@ -1,0 +1,11 @@
+{
+  "name": "leetviz-js-runtime",
+  "private": true,
+  "description": "Libraries LeetCode's JavaScript/TypeScript environment provides as globals.",
+  "dependencies": {
+    "@datastructures-js/deque": "1.0.4",
+    "@datastructures-js/priority-queue": "5.4.0",
+    "@datastructures-js/queue": "4.2.3",
+    "lodash": "4.17.21"
+  }
+}

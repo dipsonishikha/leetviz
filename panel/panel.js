@@ -1,4 +1,6 @@
 import { Engine } from './engine.js';
+import { RemoteEngine, serverHealth, serverSettings, saveServerSettings } from './remote.js';
+import { LANG_NAMES, isPython, langName, normalizeLang } from './langs.js';
 import { h, renderLocals, summarize, analyzePointers, setPointerMap } from './viz.js';
 import { lineChart, fmtNum, sup } from './chart.js';
 import { inferGenerator, paramType } from './gen.js';
@@ -39,17 +41,72 @@ const S = {
   maxN: 8,
   progress: '',
   error: null,
+  server: null,        // /health answer from the language server
+  settings: false,     // server settings box open?
 };
 
 // ------------------------------------------------------------------ engine
 
 const statusEl = document.getElementById('status');
-const engine = new Engine((state, detail) => {
-  statusEl.className = `pill ${state === 'busy' || state === 'loading' ? 'busy' : state === 'error' ? 'err' : ''}`;
-  statusEl.textContent = { loading: 'Loading Python…', ready: 'Python ready', busy: 'Running…', error: 'Engine error' }[state];
-  if (detail) statusEl.title = detail;
+let pyState = ['loading'];
+let remoteBusy = false;
+// Python runs in the browser (Pyodide); every other language on the LeetViz server.
+const pyEngine = new Engine((state, detail) => {
+  pyState = [state, detail];
+  showStatus();
   if (state === 'ready' && !S.progress) render();
 });
+const remote = new RemoteEngine((state) => {
+  remoteBusy = state === 'busy';
+  showStatus();
+});
+const engineFor = (langs) => (langs.every(isPython) ? pyEngine : remote);
+const busy = () => pyEngine.busy || remote.busy;
+function stopAll() {
+  if (pyEngine.busy) pyEngine.stop();
+  remote.stop();
+}
+
+function editorLang() {
+  return S.approaches[0]?.lang || S.ctx?.lang || 'python3';
+}
+
+function showStatus() {
+  const lang = editorLang();
+  let cls = '';
+  let text;
+  let title = '';
+  if (isPython(lang)) {
+    const [state, detail] = pyState;
+    cls = state === 'busy' || state === 'loading' ? 'busy' : state === 'error' ? 'err' : '';
+    text = { loading: 'Loading Python…', ready: 'Python ready', busy: 'Running…', error: 'Engine error' }[state];
+    title = detail || '';
+  } else if (remoteBusy) {
+    cls = 'busy';
+    text = 'Running…';
+  } else if (!S.server) {
+    text = 'Checking server…';
+    cls = 'busy';
+  } else if (!S.server.ok) {
+    cls = 'err';
+    text = 'Server offline';
+    title = S.server.error;
+  } else {
+    const info = S.server.langs?.[lang];
+    cls = info?.available ? '' : 'err';
+    text = info?.available ? `${langName(lang)} ready` : `${langName(lang)} unavailable`;
+    title = info?.available ? `Runs on ${serverSettings().url}` : info?.reason || 'not supported by this server';
+  }
+  statusEl.className = `pill ${cls}`;
+  statusEl.textContent = text;
+  statusEl.title = `${title}${title ? ' · ' : ''}Click for server settings`;
+}
+
+async function checkServer() {
+  S.server = await serverHealth();
+  showStatus();
+  return S.server;
+}
 
 // ------------------------------------------------------------------ LeetCode bridge
 
@@ -88,7 +145,7 @@ const storeKey = () => `leetviz:${S.ctx?.slug || 'none'}`;
 function save() {
   try {
     localStorage.setItem(storeKey(), JSON.stringify({
-      approaches: S.approaches.filter((a) => !a.editor).map(({ id, name, code }) => ({ id, name, code })),
+      approaches: S.approaches.filter((a) => !a.editor).map(({ id, name, code, lang }) => ({ id, name, code, lang })),
       gen: S.genEdited ? S.gen : null,
       ignoreOrder: S.ignoreOrder,
     }));
@@ -111,7 +168,7 @@ function typesPayload() {
 }
 
 function enginePayload(extra) {
-  return { method: S.sig?.method, types: typesPayload(), voidReturn: meta()?.return?.type === 'void', ...extra };
+  return { method: S.sig?.method, types: typesPayload(), voidReturn: meta()?.return?.type === 'void', meta: meta(), lang: editorLang(), ...extra };
 }
 
 function banner(text) {
@@ -132,8 +189,8 @@ async function loadContext() {
   if (changedProblem) {
     const saved = restore();
     S.trace = null; S.measure = null; S.stress = null; S.step = 0; S.exampleIdx = 0;
-    S.approaches = [{ id: 'editor', name: 'Your editor code', code: ctx.code || '', editor: true }];
-    const extra = saved?.approaches ?? (embedded ? [] : DEMO.approaches);
+    S.approaches = [{ id: 'editor', name: 'Your editor code', code: ctx.code || '', editor: true, lang: ctx.lang || 'python3' }];
+    const extra = (saved?.approaches ?? (embedded ? [] : DEMO.approaches)).map((a) => ({ ...a, lang: a.lang || 'python3' }));
     S.approaches.push(...extra);
     S.gen = saved?.gen || '';
     S.genEdited = !!saved?.gen;
@@ -143,11 +200,15 @@ async function loadContext() {
     S.stressB = S.approaches[1]?.id || null;
   } else {
     S.approaches[0].code = ctx.code ?? S.approaches[0].code;
+    S.approaches[0].lang = ctx.lang || S.approaches[0].lang;
   }
+  showStatus();
 
   const warnings = [];
   if (embedded && !ctx.hasMonaco) warnings.push('Couldn’t find LeetCode’s code editor yet — click ⟳ once the page has loaded.');
-  else if (ctx.lang && !/python/i.test(ctx.lang)) warnings.push(`LeetViz runs Python 3 — your editor is set to ${ctx.lang}. Switch the language to Python3, or paste Python approaches in Compare.`);
+  if (S.approaches.some((a) => !isPython(a.lang))) warnings.push(...await serverWarnings());
+  else checkServer();
+  if (ctx.lang === 'python') warnings.push('Python 2 code runs as Python 3 here (print is a function, / is true division).');
   banner(warnings.join(' '));
 
   await refreshSignature();
@@ -156,11 +217,28 @@ async function loadContext() {
   render();
 }
 
+async function serverWarnings() {
+  const health = await checkServer();
+  const langs = [...new Set(S.approaches.filter((a) => !isPython(a.lang)).map((a) => a.lang))];
+  if (!health.ok) {
+    return [`${langs.map(langName).join(' and ')} code runs on the LeetViz server, which isn’t reachable (${serverSettings().url}). Start it with “npm start” in leetviz/server, or click the status pill to change its address.`];
+  }
+  const missing = langs.filter((l) => !health.langs?.[l]?.available);
+  return missing.length ? [`The server can’t run ${missing.map(langName).join(', ')} yet: ${missing.map((l) => health.langs?.[l]?.reason || 'not supported').join('; ')}.`] : [];
+}
+
 async function refreshSignature() {
-  const code = approach('editor').code || S.approaches.find((a) => a.code.trim())?.code || '';
+  const ed = approach('editor');
+  if (!isPython(ed.lang)) {
+    // Other languages take their signature straight from LeetCode's metadata.
+    const mp = meta()?.params || [];
+    S.sig = meta()?.name ? { method: meta().name, params: mp.map((p) => ({ name: p.name, type: p.type, annotation: '' })) } : null;
+    return;
+  }
+  const code = ed.code || S.approaches.find((a) => a.code.trim() && isPython(a.lang))?.code || '';
   let sig = null;
   if (code.trim()) {
-    try { sig = await engine.call('signature', { code, method: meta()?.name }); } catch {}
+    try { sig = await pyEngine.call('signature', { code, method: meta()?.name }); } catch {}
   }
   const mp = meta()?.params || [];
   if (sig && !sig.error) {
@@ -181,6 +259,10 @@ async function syncCode() {
   if (ctx.slug !== S.ctx?.slug) return loadContext();
   S.ctx = ctx;
   S.approaches[0].code = ctx.code ?? S.approaches[0].code;
+  if (ctx.lang && ctx.lang !== S.approaches[0].lang) {
+    S.approaches[0].lang = ctx.lang;
+    showStatus();
+  }
   const before = JSON.stringify(S.sig?.params?.map((p) => p.name));
   await refreshSignature();
   if (JSON.stringify(S.sig?.params?.map((p) => p.name)) !== before) setExample(S.exampleIdx);
@@ -194,7 +276,7 @@ function setExample(i) {
 
 function parseInput(text) {
   try { return JSON.parse(text); } catch {}
-  // Accept Python-style literals too.
+  // Accept Python-style literals too (and a trailing comma or newline from copy/paste).
   const fixed = text.replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null').replace(/'/g, '"');
   return JSON.parse(fixed);
 }
@@ -206,12 +288,33 @@ const main = document.getElementById('main');
 function render() {
   for (const b of document.querySelectorAll('.tabs button')) b.setAttribute('aria-selected', b.dataset.tab === S.tab);
   const keepScroll = main.scrollTop;
-  main.replaceChildren(S.tab === 'step' ? renderStepTab() : S.tab === 'compare' ? renderCompareTab() : renderStressTab());
+  main.replaceChildren(S.settings ? renderSettings() : '', S.tab === 'step' ? renderStepTab() : S.tab === 'compare' ? renderCompareTab() : renderStressTab());
   main.scrollTop = keepScroll;
   if (S.tab === 'step') {
     main.querySelector('.code-line.cur, .code-line.err')?.scrollIntoView({ block: 'nearest' });
     mirrorToEditor();
   }
+}
+
+function renderSettings() {
+  const cur = serverSettings();
+  const url = h('input', { type: 'text', class: 'mono', value: cur.url, spellcheck: 'false', style: { flex: '1' } });
+  const token = h('input', { type: 'password', class: 'mono', value: cur.token, placeholder: 'optional', style: { width: '140px' } });
+  const langs = S.server?.ok ? Object.entries(S.server.langs || {}) : [];
+  return h('div', { class: 'card settings', style: { marginBottom: '12px' } },
+    h('div', { class: 'row' }, h('b', {}, 'Language server'), h('span', { class: 'spacer' }),
+      h('button', { class: 'icon-btn', title: 'Close', onclick: () => { S.settings = false; render(); } }, '✕')),
+    h('p', { class: 'hint' }, 'Python runs right here in the browser. Every other language is compiled and stepped through by the LeetViz server, which you run yourself (see the README): ', h('code', {}, 'cd leetviz/server && npm start')),
+    h('div', { class: 'row' }, h('label', { class: 'field', style: { flex: '1' } }, h('span', {}, 'Address'), url),
+      h('label', { class: 'field' }, h('span', {}, 'Token'), token),
+      h('button', { class: 'btn primary', onclick: async () => { saveServerSettings(url.value, token.value); await checkServer(); loadContext(); } }, 'Save & test')),
+    S.server && !S.server.ok ? h('div', { class: 'error-box', style: { marginTop: '8px' } }, S.server.error) : null,
+    langs.length ? h('div', { class: 'lang-list' }, langs.map(([id, v]) => h('span', { class: `chip ${v.available ? 'ok' : 'off'}`, title: v.reason || 'ready' }, `${v.available ? '✔' : '✖'} ${langName(id)}`))) : null);
+}
+
+function langSelect(value, onChange) {
+  return h('select', { title: 'Language of this approach', onchange: (e) => onChange(e.target.value) },
+    Object.entries(LANG_NAMES).map(([id, name]) => h('option', { value: id, selected: id === value }, name)));
 }
 
 function approachSelect(value, onChange, { allowNone = false } = {}) {
@@ -232,7 +335,9 @@ function renderStepTab() {
       ex.map((_, i) => h('option', { value: i, selected: i === S.exampleIdx }, `Example ${i + 1}`))) : null));
 
   if (!params().length) {
-    root.append(h('div', { class: 'empty-state' }, S.engineError || 'Write a `class Solution` method in the editor, then press ⟳.'));
+    root.append(h('div', { class: 'empty-state' }, isPython(editorLang())
+      ? 'Write a `class Solution` method in the editor, then press ⟳.'
+      : 'Open a LeetCode problem with a function signature, then press ⟳. (Design problems with several methods aren’t supported yet.)'));
     return root;
   }
   const inputs = h('div', { class: 'row', style: { marginTop: '8px', alignItems: 'flex-end' } },
@@ -240,7 +345,8 @@ function renderStepTab() {
       h('input', { type: 'text', class: 'mono', value: S.inputs[i] ?? '', spellcheck: 'false',
         oninput: (e) => { S.inputs[i] = e.target.value; e.target.classList.remove('invalid'); },
         onkeydown: (e) => { if (e.key === 'Enter') runTrace(); } }))),
-    h('button', { class: 'btn primary', onclick: runTrace, disabled: engine.busy }, '▶ Visualize'));
+    h('button', { class: 'btn primary', onclick: runTrace, disabled: busy() }, '▶ Visualize'),
+    busy() && !isPython(approach(S.stepApproach)?.lang) ? h('button', { class: 'btn', onclick: stopAll }, '■ Stop') : null);
   root.append(inputs);
 
   if (S.error) root.append(h('div', { class: 'error-box', style: { marginTop: '10px' } }, S.error));
@@ -255,8 +361,9 @@ function renderStepTab() {
     root.append(h('div', { class: 'error-box', style: { marginTop: '10px' } }, S.trace.error || 'Nothing ran.'));
     return root;
   }
-  S.trace.pointerMap ||= analyzePointers(S.trace.code);
+  S.trace.pointerMap ||= analyzePointers(S.trace.code, S.trace.lang);
   setPointerMap(S.trace.pointerMap);
+  if (S.trace.note) root.append(h('p', { class: 'hint' }, S.trace.note));
   if (S.kid) {
     root.append(renderPlayer(), renderKidStep(S.trace, S.step));
     const last = S.step === S.trace.steps.length - 1;
@@ -381,7 +488,7 @@ function renderState() {
   const step = t.steps[S.step];
   const root = h('div', { class: 'stack' });
   const depth = step.stack.length;
-  t.pointerMap ||= analyzePointers(t.code);
+  t.pointerMap ||= analyzePointers(t.code, t.lang);
   setPointerMap(t.pointerMap);
   if (depth > 1) {
     root.append(h('div', { class: 'callstack' }, 'Call stack:',
@@ -405,7 +512,7 @@ function renderState() {
   if (step.event === 'return') root.append(h('div', { class: 'card' }, '↩ ', h('b', {}, `${innermost(step).fn}`), ' returns ', h('code', {}, summarize(step.ret, 200))));
   if (S.step === t.steps.length - 1) root.append(renderResult());
   const out = t.stdout ? t.stdout.slice(0, step.out) : '';
-  if (out) root.append(h('div', {}, h('h3', {}, 'print() output'), h('div', { class: 'stdout' }, out)));
+  if (out) root.append(h('div', {}, h('h3', {}, 'Printed output'), h('div', { class: 'stdout' }, out)));
   return root;
 }
 
@@ -421,9 +528,11 @@ function renderResult() {
   }
   if (t.error) {
     return h('div', { class: 'card result bad' }, h('b', { class: 'fail' }, 'Error'), h('div', { class: 'error-box', style: { marginTop: '6px' } }, t.error + (t.errorLine ? `  (line ${t.errorLine})` : '')),
-      /IndexError/.test(t.error) ? h('p', { class: 'small' }, 'An index went past the end (or before the start) of a list. Step back a few steps and watch the pointer labels — a red dashed cell marks an out-of-range position.') : null,
-      /RecursionError/.test(t.error) ? h('p', { class: 'small' }, 'The recursion never reached a base case. Look at the call stack: the arguments should shrink toward the base case on every call.') : null,
-      /KeyError/.test(t.error) ? h('p', { class: 'small' }, 'A dictionary lookup used a missing key. Use `.get(key, default)` or check `key in d` first.') : null);
+      /IndexError|out of range|IndexOutOfBounds|index out of bounds|ArgumentOutOfRange/i.test(t.error) ? h('p', { class: 'small' }, 'An index went past the end (or before the start) of a list. Step back a few steps and watch the pointer labels — a red dashed cell marks an out-of-range position.') : null,
+      /Segmentation fault|invalid memory/i.test(t.error) ? h('p', { class: 'small' }, 'The program touched memory it doesn’t own: usually a null pointer (like ->next after the last node) or an index past the end of an array. Step back to the last line that ran.') : null,
+      /RecursionError|StackOverflow|stack overflow/i.test(t.error) ? h('p', { class: 'small' }, 'The recursion never reached a base case. Look at the call stack: the arguments should shrink toward the base case on every call.') : null,
+      /KeyError|KeyNotFound|NoSuchElement/i.test(t.error) ? h('p', { class: 'small' }, 'A lookup used a key that isn’t there. Check that the key exists first, or use a default value.') : null,
+      /NullPointer|NullReference|NoneType|nil/i.test(t.error) ? h('p', { class: 'small' }, 'Something was empty (null) when the code used it — often the node after the last one in a list or tree.') : null);
   }
   return h('div', { class: 'card result ok' }, h('b', { class: 'pass' }, 'Returned '), h('code', {}, t.returnPlain ?? summarize(t.returnValue, 300)),
     h('span', { class: 'hint' }, `  ·  ${t.steps.filter((x) => x.event === 'line').length} lines executed`));
@@ -468,8 +577,8 @@ async function runTrace() {
     return render();
   }
   try {
-    const r = await engine.call('trace', enginePayload({ code: appr.code, args, maxSteps: 5000 }));
-    S.trace = { ...r, code: appr.code, approachId: appr.id };
+    const r = await engineFor([appr.lang]).call('trace', enginePayload({ code: appr.code, lang: appr.lang, args, maxSteps: 5000 }));
+    S.trace = { ...r, code: appr.code, approachId: appr.id, lang: appr.lang };
     S.collapsed = {};
     // Start at the beginning, or jump straight to the crash so the bug is in view.
     S.step = r.error && r.steps.length ? r.steps.length - 1 : 0;
@@ -490,37 +599,37 @@ function renderCompareTab() {
     const card = h('div', { class: 'card approach', style: { '--slot': i < MAX_APPROACHES ? `var(--series-${slotOf(a.id)})` : 'var(--border)' } },
       h('div', { class: 'approach-head' },
         h('input', { type: 'text', value: a.name, oninput: (e) => { a.name = e.target.value; save(); } }),
-        a.editor ? h('span', { class: 'hint' }, embedded ? 'live from the editor' : 'demo') : null,
+        a.editor ? h('span', { class: 'hint' }, `${langName(a.lang)} · ${embedded ? 'live from the editor' : 'demo'}`) : langSelect(a.lang, (v) => { a.lang = v; save(); loadContext(); }),
         !a.editor ? h('button', { class: 'icon-btn', title: 'Remove', onclick: () => { S.approaches = S.approaches.filter((x) => x !== a); save(); render(); } }, '✕') : null),
       a.editor && embedded
         ? h('details', {}, h('summary', { class: 'small' }, `${a.code.split('\n').length} lines — click to view`), h('pre', { class: 'code', style: { padding: '6px 10px', margin: 0 } }, a.code))
-        : h('textarea', { rows: Math.min(14, Math.max(6, a.code.split('\n').length + 1)), spellcheck: 'false', placeholder: 'Paste a complete `class Solution:` here',
+        : h('textarea', { rows: Math.min(14, Math.max(6, a.code.split('\n').length + 1)), spellcheck: 'false', placeholder: `Paste a complete ${langName(a.lang)} solution here`,
             oninput: (e) => { a.code = e.target.value; save(); } }, a.code));
     root.append(card);
   });
 
   root.append(h('div', { class: 'row', style: { marginTop: '10px' } },
     h('button', { class: 'btn', disabled: S.approaches.length >= MAX_APPROACHES || !embedded, title: 'Save the code currently in the LeetCode editor as a separate approach',
-      onclick: async () => { await syncCode(); addApproach(S.approaches[0].code); } }, 'Snapshot editor code'),
-    h('button', { class: 'btn', disabled: S.approaches.length >= MAX_APPROACHES, onclick: () => addApproach('') }, '+ Paste an approach'),
+      onclick: async () => { await syncCode(); addApproach(S.approaches[0].code, S.approaches[0].lang); } }, 'Snapshot editor code'),
+    h('button', { class: 'btn', disabled: S.approaches.length >= MAX_APPROACHES, onclick: () => addApproach('', editorLang()) }, '+ Paste an approach'),
     S.approaches.length >= MAX_APPROACHES ? h('span', { class: 'hint' }, `max ${MAX_APPROACHES}`) : null));
 
   root.append(renderGeneratorEditor());
 
   const runnable = S.approaches.filter((a) => a.code.trim()).length;
   root.append(h('div', { class: 'row', style: { marginTop: '12px' } },
-    h('button', { class: 'btn primary', disabled: engine.busy || !runnable || !S.sig, onclick: runMeasure }, '▶ Measure & compare'),
-    engine.busy ? h('button', { class: 'btn', onclick: () => engine.stop() }, '■ Stop') : null,
+    h('button', { class: 'btn primary', disabled: busy() || !runnable || !S.sig, onclick: runMeasure }, '▶ Measure & compare'),
+    busy() ? h('button', { class: 'btn', onclick: stopAll }, '■ Stop') : null,
     h('span', { class: 'progress' }, S.progress)));
   if (S.error && S.tab === 'compare') root.append(h('div', { class: 'error-box', style: { marginTop: '8px' } }, S.error));
   if (S.measure) root.append(renderMeasure());
   return root;
 }
 
-function addApproach(code) {
+function addApproach(code, lang) {
   const k = S.approaches.length;
   const names = ['Brute force', 'Better', 'Optimal'];
-  S.approaches.push({ id: `a${Date.now().toString(36)}`, name: names[k - 1] || `Approach ${k + 1}`, code });
+  S.approaches.push({ id: `a${Date.now().toString(36)}`, name: names[k - 1] || `Approach ${k + 1}`, code, lang: lang || editorLang() });
   if (!S.stressB) S.stressB = S.approaches[S.approaches.length - 1].id;
   save();
   render();
@@ -529,7 +638,7 @@ function addApproach(code) {
 function renderGeneratorEditor() {
   return h('details', { style: { marginTop: '12px' }, open: S.genEdited || undefined },
     h('summary', {}, 'Input generator ', h('span', { class: 'hint' }, S.genEdited ? '(edited)' : '(auto from examples)')),
-    h('p', { class: 'hint' }, 'gen(n) builds random arguments of size n. Measurements are only as good as these inputs — make them match the constraints (e.g. sorted, distinct, worst case).'),
+    h('p', { class: 'hint' }, 'gen(n) builds random arguments of size n. It is always written in Python, whatever language your solutions use. Measurements are only as good as these inputs — make them match the constraints (e.g. sorted, distinct, worst case).'),
     h('textarea', { rows: Math.min(16, S.gen.split('\n').length + 1), spellcheck: 'false', oninput: (e) => { S.gen = e.target.value; S.genEdited = true; save(); } }, S.gen),
     h('div', { class: 'row', style: { marginTop: '6px' } },
       h('button', { class: 'btn small', onclick: () => { S.genEdited = false; S.gen = inferGenerator(params(), S.ctx?.examples || []); save(); render(); } }, 'Reset to auto'),
@@ -537,7 +646,7 @@ function renderGeneratorEditor() {
         ' Answer order doesn’t matter (“return in any order”)')));
 }
 
-const STAGE = { ops: 'counting lines', time: 'timing', mem: 'measuring memory' };
+const STAGE = { ops: 'counting lines', time: 'timing', mem: 'measuring memory', build: 'compiling' };
 
 async function runMeasure() {
   S.error = null;
@@ -546,10 +655,10 @@ async function runMeasure() {
   S.progress = 'Starting…';
   render();
   try {
-    const results = await engine.call('measure', enginePayload({
-      approaches: list.map((a) => ({ name: a.name, code: a.code })), gen: S.gen, ignoreOrder: S.ignoreOrder,
+    const results = await engineFor(list.map((a) => a.lang)).call('measure', enginePayload({
+      approaches: list.map((a) => ({ name: a.name, code: a.code, lang: a.lang })), gen: S.gen, ignoreOrder: S.ignoreOrder,
     }), (p) => {
-      S.progress = `${list[p.approach]?.name}: ${STAGE[p.stage]} at n = ${fmtNum(p.n)}`;
+      S.progress = `${list[p.approach]?.name}: ${STAGE[p.stage]}${p.stage === 'build' ? '' : ` at n = ${fmtNum(p.n)}`}`;
       const el = main.querySelector('.progress');
       if (el) el.textContent = S.progress;
     });
@@ -648,7 +757,7 @@ function renderMeasure() {
       h('p', {}, `At n = ${fmtPow10(N)} ${S.ctx?.constraintN ? '(the limit in this problem’s constraints)' : '(a typical LeetCode limit)'}: “${worst.name}” ≈ `, h('b', {}, fmtSeconds(worst.sec)), ` vs “${best.name}” ≈ `, h('b', {}, fmtSeconds(best.sec)),
         ratio && ratio > 1.5 ? ` — about ${fmtNum(ratio)}× slower.` : '.'),
       ok.length > 2 || worst.timeClass.rank !== best.timeClass.rank
-        ? h('p', { class: 'hint' }, 'Estimates extrapolate the measured curve; LeetCode’s Python limit is roughly 1–3 s per test file.') : null));
+        ? h('p', { class: 'hint' }, 'Estimates extrapolate the measured curve; LeetCode’s time limit is roughly 1–3 s per test file.') : null));
   }
 
   if (S.kid) {
@@ -675,7 +784,7 @@ function renderKidCards(results) {
       r.error ? h('div', { class: 'error-box' }, r.error)
         : [h('div', { class: 'kid-card-says' }, `It ${kidO(r.timeClass)}.`),
           r.sec ? h('div', { class: 'kid-card-says' }, r.sec > 2 ? 'Too slow for LeetCode’s big tests.' : r.sec > 0.5 ? 'Just barely fast enough.' : 'Fast enough for LeetCode.') : null,
-          h('div', { class: 'kid-card-o' }, `Time ${r.timeClass?.label || '?'} · Space ${r.spaceClass?.label || '?'}`)]));
+          h('div', { class: 'kid-card-o' }, `Time ${r.timeClass?.label || '?'} · Space ${r.spaceClass?.label || (r.memMeasured === false ? 'not measured' : '?')}`)]));
   }
   return box;
 }
@@ -707,7 +816,8 @@ function renderVerdict(r, N) {
   }
   card.append(h('div', { class: 'bigO' },
     h('span', { class: 'k' }, 'Time'), h('span', { class: 'v' }, r.timeClass?.label || '?', ' ', h('small', {}, r.timeClass ? `${r.timeClass.confidence} confidence` : 'not enough data')),
-    h('span', { class: 'k' }, 'Space'), h('span', { class: 'v' }, r.spaceClass?.label || '?', ' ', h('small', {}, r.spaceClass ? (r.spaceClass.via === 'recursion depth' ? 'call stack' : 'extra') : ''))));
+    h('span', { class: 'k' }, 'Space'), h('span', { class: 'v' }, r.spaceClass?.label || (r.memMeasured === false ? '—' : '?'), ' ',
+      h('small', {}, r.spaceClass ? ({ 'recursion depth': 'call stack', allocations: 'allocated' }[r.spaceClass.via] || 'extra') : r.memMeasured === false ? 'not measured for this language' : ''))));
   if (r.sec !== null && r.sec !== undefined) {
     card.append(h('div', { class: 'estimate' }, `At n = ${fmtPow10(N)}: ≈ ${fmtSeconds(r.sec)} `, verdictAt(r.sec)));
   }
@@ -749,7 +859,7 @@ function renderStressTab() {
     'Runs two approaches on hundreds of small random inputs and stops at the first input where they disagree (or one crashes / loops forever). Use a simple brute force you trust as the reference — then step through the failing input to see where yours goes wrong.'));
   if (S.approaches.length < 2) {
     root.append(h('div', { class: 'card' }, h('p', {}, 'You need a second approach to compare against.'),
-      h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => { addApproach(''); S.tab = 'compare'; render(); } }, '+ Add a brute-force reference'))));
+      h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => { addApproach('', editorLang()); S.tab = 'compare'; render(); } }, '+ Add a brute-force reference'))));
     return root;
   }
   if (!S.stressB || !S.approaches.some((a) => a.id === S.stressB)) S.stressB = S.approaches.find((a) => a.id !== S.stressA)?.id;
@@ -762,8 +872,8 @@ function renderStressTab() {
       h('label', { class: 'small' }, h('input', { type: 'checkbox', checked: S.ignoreOrder, onchange: (e) => { S.ignoreOrder = e.target.checked; save(); } }), ' any order'))));
   root.append(renderGeneratorEditor());
   root.append(h('div', { class: 'row', style: { marginTop: '12px' } },
-    h('button', { class: 'btn primary', disabled: engine.busy || S.stressA === S.stressB, onclick: runStress }, '▶ Hunt for a failing input'),
-    engine.busy ? h('button', { class: 'btn', onclick: () => engine.stop() }, '■ Stop') : null,
+    h('button', { class: 'btn primary', disabled: busy() || S.stressA === S.stressB, onclick: runStress }, '▶ Hunt for a failing input'),
+    busy() ? h('button', { class: 'btn', onclick: stopAll }, '■ Stop') : null,
     h('span', { class: 'progress' }, S.progress)));
   if (S.error && S.tab === 'stress') root.append(h('div', { class: 'error-box', style: { marginTop: '8px' } }, S.error));
   if (S.stress) root.append(renderStressResult());
@@ -778,7 +888,7 @@ async function runStress() {
   S.progress = 'Starting…';
   render();
   try {
-    const r = await engine.call('stress', enginePayload({ a: { code: a.code }, b: { code: b.code }, gen: S.gen, ignoreOrder: S.ignoreOrder, trials: S.trials, maxN: S.maxN }),
+    const r = await engineFor([a.lang, b.lang]).call('stress', enginePayload({ a: { code: a.code, lang: a.lang }, b: { code: b.code, lang: b.lang }, gen: S.gen, ignoreOrder: S.ignoreOrder, trials: S.trials, maxN: S.maxN }),
       (p) => { const el = main.querySelector('.progress'); if (el) el.textContent = `test ${p.trial} / ${p.trials}`; });
     S.stress = { ...r, a: a.id, b: b.id };
   } catch (e) {
@@ -829,6 +939,7 @@ for (const b of document.querySelectorAll('.tabs button')) {
   b.addEventListener('click', () => { S.tab = b.dataset.tab; S.error = null; render(); });
 }
 document.getElementById('sync').addEventListener('click', loadContext);
+statusEl.addEventListener('click', () => { S.settings = !S.settings; if (S.settings) checkServer().then(render); render(); });
 const modeBtn = document.getElementById('mode');
 const showMode = () => {
   modeBtn.textContent = S.kid ? 'Simple view' : 'Detailed view';

@@ -37,9 +37,15 @@ const pretty = (code) => String(code)
   .replace(/\s!=\s/g, ' ≠ ').replace(/\s==\s/g, ' = ')
   .replace(/\bnot ([A-Za-z_]\w*)\b(?!\s*(?:in\b|\(|\[|\.))/g, '$1 is empty').replace(/\bTrue\b/g, 'True').replace(/\bNone\b/g, 'nothing');
 
+// Values from every language: Python says None/True/False, the others null/nil/true/false
+// (their tracers tag them with k: 'null' | 'bool').
+const isNull = (v) => v?.t === 'prim' && (v.k === 'null' || v.v === 'None');
+const isTrue = (v) => v?.t === 'prim' && (v.v === 'True' || (v.k === 'bool' && v.v === 'true'));
+const isFalse = (v) => v?.t === 'prim' && (v.v === 'False' || (v.k === 'bool' && v.v === 'false'));
+
 const plainValue = (v) => {
   if (!v) return '?';
-  if (v.t === 'prim') return v.v === 'None' ? 'nothing' : v.v === 'True' ? 'True ✅' : v.v === 'False' ? 'False ❌' : v.v;
+  if (v.t === 'prim') return isNull(v) ? 'nothing' : isTrue(v) ? 'True ✅' : isFalse(v) ? 'False ❌' : v.v;
   return summarize(v, 40);
 };
 
@@ -68,7 +74,7 @@ export function actionStep(t, i) {
 function friendlyError(cur, prev) {
   const exc = cur.exc || '';
   const locals = frameOf(cur).locals || {};
-  if (exc.startsWith('IndexError')) {
+  if (/^IndexError|out of range|IndexOutOfBounds|index out of bounds|ArgumentOutOfRange|RangeError/i.test(exc)) {
     for (const [name, idx] of prev?.info?.looks || []) {
       const v = locals[name];
       const len = v?.len ?? (v?.t === 'str' ? v.v.length : null);
@@ -79,10 +85,11 @@ function friendlyError(cur, prev) {
     }
     return ['Oops! We tried to open a box that doesn’t exist.'];
   }
+  if (/Segmentation fault|invalid memory/i.test(exc)) return ['Oops! We reached for something that isn’t there — maybe a box past the end, or the next train car after the last one.'];
   if (exc.startsWith('KeyError')) return ['Oops! We looked in the notebook for ', big(exc.replace(/^KeyError:\s*/, '')), ', but that page is empty.'];
-  if (exc.startsWith('ZeroDivisionError')) return ['Oops! We tried to divide by zero — nobody can do that!'];
-  if (exc.startsWith('RecursionError')) return ['The helpers kept calling more helpers forever and never finished!'];
-  if (/NoneType/.test(exc)) return ['Oops! We tried to use something that is empty (nothing / None) — like going to the next train car after the last one.'];
+  if (/^ZeroDivisionError|ArithmeticException|DivideByZero|division by zero/i.test(exc)) return ['Oops! We tried to divide by zero — nobody can do that!'];
+  if (/^RecursionError|StackOverflow|stack overflow/i.test(exc)) return ['The helpers kept calling more helpers forever and never finished!'];
+  if (/NoneType|NullPointer|NullReference|null pointer|nil/i.test(exc)) return ['Oops! We tried to use something that is empty (nothing / None) — like going to the next train car after the last one.'];
   return ['Oops! ', exc];
 }
 
@@ -116,7 +123,84 @@ export function narrate(t, i) {
     if (said) return said;
   }
   const line = (t.code.split('\n')[(prev?.line || cur.line) - 1] || '').trim();
+  if (prev.event === 'line' && !prev.info) {
+    const said = describeChanges(prev, cur, line);
+    if (said) return said;
+  }
   return { tone: 'info', parts: ['Ran ', code(line)] };
+}
+
+/**
+ * Language-independent narration from what changed between two steps (used when the engine
+ * has no per-line `info`, i.e. every language except Python).
+ */
+function describeChanges(prev, cur, line) {
+  if (cur.stack.length !== prev.stack.length) return null;
+  const before = frameOf(prev).locals || {};
+  const after = frameOf(cur).locals || {};
+  const said = [];
+  for (const [k, v] of Object.entries(after)) {
+    const o = before[k];
+    if (o && JSON.stringify(o) === JSON.stringify(v)) continue;
+    const part = describeChange(k, o, v);
+    if (part) said.push(part);
+  }
+  if (said.length) {
+    return { tone: 'info', parts: said.slice(0, 2).flatMap((p, i) => (i ? ['; ', ...p] : p)).concat(said.length > 2 ? [` (and ${said.length - 2} more)`] : []) };
+  }
+  // Nothing changed: a test that decided where to go next.
+  const test = line.match(/^(?:\}\s*)?(if|else if|elif|while|for)\b\s*\(?(.*?)\)?\s*(?:\{|:|then|do)?\s*$/);
+  if (test && test[1] !== 'for') {
+    const inside = cur.line > prev.line && cur.line <= prev.line + 1;
+    return { tone: inside ? 'yes' : 'no', parts: [test[1] === 'while' ? 'Keep going? ' : 'Is ', code(test[2] || line), '?', ' ', big(inside ? 'Yes ✅' : 'No ❌')] };
+  }
+  return null;
+}
+
+function describeChange(k, o, v) {
+  if (!o) {
+    if (v.t === 'prim') return [code(k), ' = ', big(plainValue(v))];
+    if ((v.t === 'list' || v.t === 'dict' || v.t === 'set') && v.len === 0) {
+      return [v.t === 'dict' ? 'Open a new empty notebook called ' : v.t === 'set' ? 'Get an empty bag called ' : 'Make an empty list called ', code(k)];
+    }
+    return [code(k), ' = ', big(summarize(v, 30))];
+  }
+  if (v.t === 'prim' && o.t === 'prim') {
+    if (typeof v.num === 'number' && typeof o.num === 'number' && v.num - o.num === 1) return [code(k), ' goes up by 1: ', big(`${o.v} → ${v.v}`)];
+    if (typeof v.num === 'number' && typeof o.num === 'number' && o.num - v.num === 1) return [code(k), ' goes down by 1: ', big(`${o.v} → ${v.v}`)];
+    return [code(k), ' becomes ', big(plainValue(v)), ` (was ${plainValue(o)})`];
+  }
+  if (v.t === 'dict' && o.t === 'dict') {
+    const old = new Map(o.entries.map(([key, x]) => [key, JSON.stringify(x)]));
+    const hit = v.entries.find(([key, x]) => old.get(key) !== JSON.stringify(x));
+    if (hit) return ['Write in the notebook ', code(k), ': ', big(`${hit[0]} ➜ ${summarize(hit[1], 20)}`)];
+    if (v.len < o.len) return ['Tear a page out of the notebook ', code(k)];
+  }
+  if (v.t === 'set' && o.t === 'set') {
+    const old = new Set(o.items.map((x) => JSON.stringify(x)));
+    const added = v.items.find((x) => !old.has(JSON.stringify(x)));
+    if (added && v.len > o.len) return ['Put ', big(summarize(added, 16)), ' into the bag ', code(k)];
+    if (v.len < o.len) return ['Take something out of the bag ', code(k)];
+  }
+  if (v.t === 'list' && o.t === 'list') {
+    if (v.len === o.len + 1) {
+      const first = JSON.stringify(v.items[0]) !== JSON.stringify(o.items[0]) && v.items.length > 1 && JSON.stringify(v.items[1]) === JSON.stringify(o.items[0]);
+      return first ? ['Put ', big(summarize(v.items[0], 16)), ' at the front of ', code(k)] : ['Put ', big(summarize(v.items[v.items.length - 1], 16)), ' at the end of ', code(k)];
+    }
+    if (v.len === o.len - 1) {
+      const fromFront = o.items.length > 1 && JSON.stringify(v.items[0]) === JSON.stringify(o.items[1]);
+      return fromFront ? ['Take the first item out of ', code(k)] : ['Take the last item off ', code(k)];
+    }
+    if (v.len === o.len) {
+      const j = v.items.findIndex((x, i) => JSON.stringify(x) !== JSON.stringify(o.items[i]));
+      if (j >= 0) return ['Put ', big(summarize(v.items[j], 16)), ' into box ', big(`#${j}`), ' of ', code(k)];
+    }
+    return [code(k), ` now has ${v.len} item${v.len === 1 ? '' : 's'}`];
+  }
+  if (v.t === 'str' && o.t === 'str') return [code(k), ' becomes ', big(`“${v.v.slice(0, 30)}”`)];
+  if (v.t === 'llist' || v.t === 'tree') return [code(k), ' now points to node ', big(v.t === 'llist' ? (v.nodes[0]?.val ?? 'nothing') : v.nodes[v.root]?.val)];
+  if (isNull(v)) return [code(k), ' now points to nothing'];
+  return [code(k), ' changed'];
 }
 
 function describe(prev, cur) {
@@ -283,9 +367,9 @@ function renderScene(locals, prev, looks, stack) {
       const changed = prev && (!o || JSON.stringify(o) !== JSON.stringify(v));
       const isPtr = INDEX_NAME.test(k) && ints[k] !== undefined;
       let shown = v.t === 'str' ? `“${v.v}”` : v.v;
-      if (v.v === 'True') shown = 'yes ✅';
-      if (v.v === 'False') shown = 'no ❌';
-      if (v.v === 'None') shown = '∅';
+      if (isTrue(v)) shown = 'yes ✅';
+      if (isFalse(v)) shown = 'no ❌';
+      if (isNull(v)) shown = '∅';
       return h('div', { class: `kid-bubble${changed ? ' changed' : ''}${isPtr ? ' ptr' : ''}` },
         h('div', { class: 'kid-bubble-name' }, k),
         h('div', { class: 'kid-bubble-val' }, shown),
@@ -325,7 +409,7 @@ function renderScene(locals, prev, looks, stack) {
       if (v.t === 'list' && items.length && items.every((x) => x.t === 'list')) {
         title = `${k} — a grid`;
         body = renderTiles(v, o, ints, looks.filter((l) => l[0] === k));
-      } else if (v.t === 'list' && /^(stack|stk|st|stack\d)$/i.test(k)) {
+      } else if (v.t === 'list' && (v.kind === 'stack' || /^(stack|stk|st|stack\d)$/i.test(k))) {
         title = `${k} — a pile of plates (we add and take from the top)`;
         body = renderPlates(items, oldItems);
       } else if (v.kind === 'deque' || /^(q|queue|dq|bfs)$/i.test(k)) {

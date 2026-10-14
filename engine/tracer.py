@@ -21,6 +21,7 @@ from bisect import bisect_left, bisect_right, insort
 from itertools import accumulate, permutations, combinations, product, chain, groupby, zip_longest
 from functools import lru_cache, cache, reduce, cmp_to_key
 from math import inf, gcd, sqrt, ceil, floor, log2, comb, isqrt
+xrange = range  # Python 2 solutions (LeetCode's "Python" language) run as Python 3
 
 class ListNode:
     def __init__(self, val=0, next=None):

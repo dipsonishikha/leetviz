@@ -1,3 +1,5 @@
 vendor/
 __pycache__/
 *.zip
+server/.toolchains/
+server/langs/js/node_modules/

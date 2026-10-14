@@ -277,3 +277,10 @@ details > summary { cursor: pointer; color: var(--text-2); font-weight: 500; pad
 .fail { color: var(--bad); font-weight: 600; }
 .empty-state { text-align: center; color: var(--muted); padding: 30px 10px; }
 kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
+
+/* Server settings (opened from the status pill) */
+#status { cursor: pointer; }
+.settings .row { align-items: flex-end; }
+.lang-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+.lang-list .chip.ok { color: var(--good, inherit); }
+.lang-list .chip.off { color: var(--muted); }

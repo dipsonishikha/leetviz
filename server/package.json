@@ -1,0 +1,13 @@
+{
+  "name": "leetviz-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Compiles, runs and traces LeetCode solutions in every LeetCode language for the LeetViz extension.",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "toolchains": "./scripts/install-toolchains.sh",
+    "test": "node test/run-tests.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

@@ -1,0 +1,317 @@
+package main
+
+// LeetViz driver for Go solutions (see server/lib/runner.js for the protocol).
+// Arguments are built with reflection from the solution function's own parameter types, so
+// this file is the same for every problem; only lv_bind.go (`var lvFn = twoSum`) changes.
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+	"reflect"
+	"runtime"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type ListNode struct {
+	Val  int
+	Next *ListNode
+}
+
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
+}
+
+type lvType struct {
+	k  string
+	of *lvType
+}
+
+func lvParseType(s string) *lvType {
+	if strings.HasSuffix(s, "[]") {
+		return &lvType{"seq", lvParseType(s[:len(s)-2])}
+	}
+	if strings.HasPrefix(s, "list<") && strings.HasSuffix(s, ">") {
+		return &lvType{"seq", lvParseType(s[5 : len(s)-1])}
+	}
+	return &lvType{s, nil}
+}
+
+type lvReader struct {
+	toks []string
+	pos  int
+}
+
+func (r *lvReader) tok() string { r.pos++; return r.toks[r.pos-1] }
+
+func lvUnpct(t string) string {
+	var b []byte
+	for i := 1; i < len(t); i++ {
+		if t[i] == '%' && i+2 < len(t) {
+			v, _ := strconv.ParseUint(t[i+1:i+3], 16, 8)
+			b = append(b, byte(v))
+			i += 2
+		} else {
+			b = append(b, t[i])
+		}
+	}
+	return string(b)
+}
+
+func (r *lvReader) read(lt *lvType, t reflect.Type) reflect.Value {
+	v := reflect.New(t).Elem()
+	switch lt.k {
+	case "integer", "long":
+		n, _ := strconv.ParseInt(r.tok(), 10, 64)
+		if t.Kind() == reflect.Float64 || t.Kind() == reflect.Float32 {
+			v.SetFloat(float64(n))
+		} else {
+			v.SetInt(n)
+		}
+	case "double":
+		f, _ := strconv.ParseFloat(r.tok(), 64)
+		v.SetFloat(f)
+	case "boolean":
+		v.SetBool(r.tok() == "1")
+	case "string":
+		s := lvUnpct(r.tok())
+		if t.Kind() == reflect.Slice { // []byte
+			v.SetBytes([]byte(s))
+		} else {
+			v.SetString(s)
+		}
+	case "character":
+		s := lvUnpct(r.tok())
+		if t.Kind() == reflect.String {
+			v.SetString(s)
+		} else if t.Kind() == reflect.Int32 {
+			v.SetInt(int64([]rune(s)[0]))
+		} else {
+			v.SetUint(uint64(s[0]))
+		}
+	case "ListNode":
+		n, _ := strconv.Atoi(r.tok())
+		dummy := &ListNode{}
+		cur := dummy
+		for i := 0; i < n; i++ {
+			x, _ := strconv.Atoi(r.tok())
+			cur.Next = &ListNode{Val: x}
+			cur = cur.Next
+		}
+		v.Set(reflect.ValueOf(dummy.Next))
+	case "TreeNode":
+		n, _ := strconv.Atoi(r.tok())
+		t2 := make([]string, n)
+		for i := range t2 {
+			t2[i] = r.tok()
+		}
+		if n == 0 || t2[0] == "#" {
+			return v
+		}
+		x, _ := strconv.Atoi(t2[0])
+		root := &TreeNode{Val: x}
+		q := []*TreeNode{root}
+		i := 1
+		for h := 0; h < len(q) && i < n; h++ {
+			node := q[h]
+			if i < n && t2[i] != "#" {
+				x, _ := strconv.Atoi(t2[i])
+				node.Left = &TreeNode{Val: x}
+				q = append(q, node.Left)
+			}
+			i++
+			if i < n && t2[i] != "#" {
+				x, _ := strconv.Atoi(t2[i])
+				node.Right = &TreeNode{Val: x}
+				q = append(q, node.Right)
+			}
+			i++
+		}
+		v.Set(reflect.ValueOf(root))
+	case "seq":
+		n, _ := strconv.Atoi(r.tok())
+		s := reflect.MakeSlice(t, n, n)
+		for i := 0; i < n; i++ {
+			s.Index(i).Set(r.read(lt.of, t.Elem()))
+		}
+		v.Set(s)
+	default:
+		panic("unsupported type " + lt.k)
+	}
+	return v
+}
+
+// lvPlain converts a result into something encoding/json prints the way LeetCode does.
+func lvPlain(v reflect.Value) interface{} {
+	if !v.IsValid() {
+		return nil
+	}
+	switch x := v.Interface().(type) {
+	case *ListNode:
+		out := []interface{}{}
+		for c, k := x, 0; c != nil && k < 100000; c, k = c.Next, k+1 {
+			out = append(out, c.Val)
+		}
+		return out
+	case *TreeNode:
+		out := []interface{}{}
+		q := []*TreeNode{x}
+		for i := 0; i < len(q) && len(q) < 400000; i++ {
+			if q[i] == nil {
+				out = append(out, nil)
+			} else {
+				out = append(out, q[i].Val)
+				q = append(q, q[i].Left, q[i].Right)
+			}
+		}
+		for len(out) > 0 && out[len(out)-1] == nil {
+			out = out[:len(out)-1]
+		}
+		return out
+	case []byte:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			out := make([]interface{}, len(x))
+			for i, b := range x {
+				out[i] = string(rune(b))
+			}
+			return out
+		}
+	case byte:
+		return string(rune(x))
+	case float64:
+		if math.IsInf(x, 0) || math.IsNaN(x) {
+			return nil
+		}
+		return x
+	}
+	switch v.Kind() {
+	case reflect.Slice, reflect.Array:
+		out := make([]interface{}, v.Len())
+		for i := range out {
+			out[i] = lvPlain(v.Index(i))
+		}
+		return out
+	case reflect.Int32:
+		if v.Type().Name() == "rune" || v.Type().Name() == "int32" {
+			return v.Int()
+		}
+	case reflect.Ptr, reflect.Interface:
+		if v.IsNil() {
+			return nil
+		}
+	}
+	return v.Interface()
+}
+
+func lvJSON(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return strconv.Quote(fmt.Sprint(v))
+	}
+	return string(b)
+}
+
+var lvTypes []*lvType
+var lvVoid bool
+
+func lvArgs(toks []string) []reflect.Value {
+	ft := reflect.TypeOf(lvFn)
+	r := &lvReader{toks: toks}
+	args := make([]reflect.Value, len(lvTypes))
+	for i, lt := range lvTypes {
+		args[i] = r.read(lt, ft.In(i))
+	}
+	return args
+}
+
+func lvResult(args, out []reflect.Value) string {
+	if lvVoid || len(out) == 0 {
+		return lvJSON(lvPlain(args[0]))
+	}
+	return lvJSON(lvPlain(out[0]))
+}
+
+func lvErr(p interface{}) string {
+	msg := fmt.Sprint(p)
+	if strings.Contains(msg, "stack overflow") {
+		msg = "stack overflow (recursion too deep — missing base case?)"
+	}
+	return "panic: " + msg
+}
+
+// lvCall is where the tracer's first breakpoint sits.
+//
+//go:noinline
+func lvCall(args []reflect.Value) []reflect.Value {
+	return reflect.ValueOf(lvFn).Call(args)
+}
+
+func main() {
+	mode := os.Args[1]
+	rest := os.Args[2:]
+	arrow := 0
+	for i, s := range rest {
+		if s == "->" {
+			arrow = i
+		}
+	}
+	for _, s := range rest[:arrow] {
+		lvTypes = append(lvTypes, lvParseType(s))
+	}
+	lvVoid = rest[arrow+1] == "void"
+	debug.SetMaxStack(1 << 30)
+	in := bufio.NewReaderSize(os.Stdin, 1<<20)
+	out := bufio.NewWriter(os.Stdout)
+	if mode == "trace" {
+		line, _ := in.ReadString('\n')
+		args := lvArgs(strings.Fields(line))
+		res := lvCall(args)
+		fmt.Printf("\n\x01LV %s\n", lvResult(args, res))
+		return
+	}
+	for {
+		line, err := in.ReadString('\n')
+		if err != nil && line == "" {
+			break
+		}
+		f := strings.Fields(line)
+		minTime, _ := strconv.ParseFloat(f[0], 64)
+		maxRuns, _ := strconv.Atoi(f[1])
+		reply := func() (s string) {
+			defer func() {
+				if p := recover(); p != nil {
+					s = `{"err":` + lvJSON(lvErr(p)) + `}`
+				}
+			}()
+			var total float64
+			runs := 0
+			var alloc uint64
+			var res string
+			var ms runtime.MemStats
+			for runs < maxRuns && (runs == 0 || total < minTime) {
+				args := lvArgs(f[3:])
+				runtime.ReadMemStats(&ms)
+				a0 := ms.TotalAlloc
+				t0 := time.Now()
+				outv := reflect.ValueOf(lvFn).Call(args)
+				total += time.Since(t0).Seconds()
+				if runs == 0 {
+					runtime.ReadMemStats(&ms)
+					alloc = ms.TotalAlloc - a0
+				}
+				runs++
+				res = lvResult(args, outv)
+			}
+			return fmt.Sprintf(`{"t":%g,"runs":%d,"mem":%d,"depth":-1,"out":%s}`, total/float64(runs), runs, alloc, res)
+		}()
+		fmt.Fprintf(out, "\x01LV %s\n", reply)
+		out.Flush()
+	}
+}

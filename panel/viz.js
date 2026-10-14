@@ -46,7 +46,7 @@ const PY_WORDS = new Set(['len', 'range', 'enumerate', 'and', 'or', 'not', 'in',
  *   x = len(arr) / range(len(arr))
  *   mid = (lo + hi) // 2        -> links spread across assignments until nothing changes
  */
-export function analyzePointers(code) {
+export function analyzePointers(code, lang = 'python3') {
   const links = {};
   const add = (v, arr) => {
     if (v === arr || PY_WORDS.has(v) || /^\d/.test(v)) return false;
@@ -56,7 +56,8 @@ export function analyzePointers(code) {
     return true;
   };
   const ids = (text) => (text.match(/[A-Za-z_]\w*/g) || []).filter((w) => !PY_WORDS.has(w));
-  const lines = code.split('\n').map((l) => l.replace(/#.*$/, ''));
+  const comment = lang === 'python3' || lang === 'python' || lang === 'ruby' || lang === 'elixir' ? /#.*$/ : lang === 'erlang' ? /%.*$/ : lang === 'racket' ? /;.*$/ : /\/\/.*$/;
+  const lines = code.split('\n').map((l) => l.replace(comment, ''));
   const assigns = [];
   for (const line of lines) {
     for (const m of line.matchAll(/([A-Za-z_]\w*)\s*\[([^\[\]]+)\]/g)) for (const v of ids(m[2])) add(v, m[1]);

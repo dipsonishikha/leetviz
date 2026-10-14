@@ -155,6 +155,17 @@
     }).filter(Boolean);
   }
 
+  // Same table as panel/langs.js (content scripts can't import modules).
+  const LANGS = ['cpp', 'java', 'python3', 'python', 'c', 'csharp', 'javascript', 'typescript', 'php', 'swift', 'kotlin', 'dart', 'golang', 'ruby', 'scala', 'rust', 'racket', 'erlang', 'elixir'];
+  const FROM_MONACO = { cpp: 'cpp', java: 'java', python: 'python3', c: 'c', csharp: 'csharp', javascript: 'javascript', typescript: 'typescript', php: 'php', swift: 'swift', kotlin: 'kotlin', dart: 'dart', go: 'golang', golang: 'golang', ruby: 'ruby', scala: 'scala', rust: 'rust', racket: 'racket', scheme: 'racket', erlang: 'erlang', elixir: 'elixir' };
+  const isPy = (l) => l === 'python' || l === 'python3';
+
+  function normalizeLang(slug, monacoId) {
+    const fromMonaco = FROM_MONACO[monacoId] || null;
+    if (LANGS.includes(slug) && (!fromMonaco || fromMonaco === slug || (isPy(slug) && isPy(fromMonaco)))) return slug;
+    return fromMonaco || (LANGS.includes(slug) ? slug : null);
+  }
+
   function isDark() {
     const html = document.documentElement;
     if (html.classList.contains('dark') || html.dataset.theme === 'dark') return true;
@@ -171,7 +182,7 @@
       slug,
       title: q ? `${q.questionFrontendId}. ${q.title}` : document.title.replace(/ - LeetCode.*/, ''),
       code: editor?.code ?? null,
-      lang: editor?.lang ?? null,
+      lang: normalizeLang(editor?.lcLang, editor?.lang),
       hasMonaco: !!editor?.hasMonaco,
       meta,
       examples: meta?.params ? parseExamples(q?.exampleTestcaseList, meta.params.length) : [],

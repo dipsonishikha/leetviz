@@ -16,10 +16,22 @@
       const model = ed.getModel();
       if (!model) continue;
       const text = model.getValue();
-      const score = (/\bclass\s+Solution\b|\bdef\s|\bfunction\b/.test(text) ? 1e7 : 0) + text.length;
+      const score = (/\bclass\s+Solution\b|\bdef\s|\bfunction\b|\bfunc\s|\bfn\s|\bimpl\s+Solution\b|\bdefmodule\b|\(define|-spec\s|^\w[\w\s\*]*\(.*\)\s*\{/m.test(text) ? 1e7 : 0) + text.length;
       if (!best || score > best.score) best = { ed, score };
     }
     return best?.ed ?? null;
+  }
+
+  // LeetCode remembers the picked language in localStorage ("global_lang": "\"cpp\""). Monaco's
+  // own language id can't tell Python 2 from Python 3, so prefer LeetCode's slug.
+  function leetcodeLang() {
+    try {
+      const raw = localStorage.getItem('global_lang');
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return raw; }
+    } catch {
+      return null;
+    }
   }
 
   function reply(id, data) {
@@ -60,6 +72,7 @@
       reply(msg.id, {
         code: model ? model.getValue() : null,
         lang: model ? model.getLanguageId() : null,
+        lcLang: leetcodeLang(),
         hasMonaco: !!window.monaco,
       });
     } else if (msg.type === 'decorate') {

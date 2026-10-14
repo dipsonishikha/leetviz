@@ -1,0 +1,4 @@
+vendor/
+server/.toolchains/
+server/langs/js/node_modules/
+**/__pycache__/
